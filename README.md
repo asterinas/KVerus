@@ -37,7 +37,14 @@ KVerus ships a set of agent skills (under `skills/`) that can be installed into 
 $ ./scripts/install-skills.sh ~/my-project
 ```
 
-Run `./scripts/install-skills.sh --help` for the full set of options. Common ones:
+On Windows (PowerShell):
+
+```powershell
+# Install all skills into a target project (symlink mode, agent target by default)
+> .\scripts\install-skills.ps1 ~\my-project
+```
+
+Run `./scripts/install-skills.sh --help` (or `.\scripts\install-skills.ps1 --help` on Windows) for the full set of options. Common ones:
 
 | Option          | Description                                   |
 | --------------- | --------------------------------------------- |
