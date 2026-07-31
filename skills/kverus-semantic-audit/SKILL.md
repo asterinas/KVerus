@@ -32,7 +32,7 @@ This skill is not a style review and not a proof review. Ignore differences that
 
    ```bash
    . "$AGENT_DIR/kverus.env"
-"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-semantic-audit/scripts/collect_exec_diffs.py" \
+"$KVERUS_PYTHON" "$AGENT_DIR/skills/kverus-semantic-audit/scripts/collect_exec_diffs.py" \
      --rust-dir <rust_dir> \
      --verus-dir <verus_dir> \
      --out-dir <out_dir>

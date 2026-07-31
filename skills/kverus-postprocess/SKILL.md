@@ -21,7 +21,7 @@ Set `AGENT_DIR` to the installed agent directory when running commands manually.
 
 ```bash
 . "$AGENT_DIR/kverus.env"
-"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-postprocess/scripts/kverus_postprocess.py" \
+"$KVERUS_PYTHON" "$AGENT_DIR/skills/kverus-postprocess/scripts/kverus_postprocess.py" \
   --base <base-ref> \
   --target-path <path1,path2> \
   --rule-repo <owner/repo> \
@@ -60,7 +60,7 @@ By default postprocess strips **only functions whose added diff lines (against `
 
 ```bash
 . "$AGENT_DIR/kverus.env"
-"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-postprocess/scripts/kverus_postprocess.py" \
+"$KVERUS_PYTHON" "$AGENT_DIR/skills/kverus-postprocess/scripts/kverus_postprocess.py" \
   --base <base-ref> \
   --target-path <path1,path2> \
   --rule-repo <owner/repo> \

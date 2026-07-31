@@ -37,7 +37,7 @@ For routine redundant proof-statement cleanup, prefer the bundled script before 
 
 ```bash
 . "$AGENT_DIR/kverus.env"
-"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-strip/scripts/simplify_proof.py" \
+"$KVERUS_PYTHON" "$AGENT_DIR/skills/kverus-strip/scripts/simplify_proof.py" \
   --base <git-base> \
   --target-dir '<dir1,dir2>' \
   --verify-command '<verification command>' \
@@ -50,7 +50,7 @@ To simplify a single function (or a few) instead of a whole file or directory, p
 
 ```bash
 . "$AGENT_DIR/kverus.env"
-"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-strip/scripts/simplify_proof.py" \
+"$KVERUS_PYTHON" "$AGENT_DIR/skills/kverus-strip/scripts/simplify_proof.py" \
   --target-dir '<path/to/file.rs>' \
   --function '<function_name>[,<other_name>]' \
   --verify-command '<verification command>' \
@@ -65,7 +65,7 @@ To restrict stripping to only the functions you actually changed in this diff, p
 
 `tree-sitter-verus` ships in the KVerus venv referenced by `kverus.env` (the install
 script checks it). Run the script with that venv's Python
-(`$KVERUS_ROOT/.venv/bin/python`, set up by sourcing `$AGENT_DIR/kverus.env`) and full
+(`$KVERUS_PYTHON`, set up by sourcing `$AGENT_DIR/kverus.env`) and full
 proof-call simplification is active automatically — no manual availability check is
 needed. If the venv is ever unavailable, the default mode errors out — pass
 `--text-only` to force text-based (asserts-only) parsing; always run the script

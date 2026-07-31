@@ -216,7 +216,7 @@ After scoring each file:
 
    ```bash
    . "$AGENT_DIR/kverus.env"
-"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-semantic-audit/scripts/collect_exec_diffs.py" \
+"$KVERUS_PYTHON" "$AGENT_DIR/skills/kverus-semantic-audit/scripts/collect_exec_diffs.py" \
      --rust-dir "$ORIG_DIR" \
      --verus-dir <verus_dir> \
      --out-dir <out_dir>/audit

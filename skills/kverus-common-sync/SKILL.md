@@ -13,14 +13,14 @@ Run the checker from the repository root:
 
 ```bash
 . "$AGENT_DIR/kverus.env"
-"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-common-sync/scripts/check_sync.py"
+"$KVERUS_PYTHON" "$AGENT_DIR/skills/kverus-common-sync/scripts/check_sync.py"
 ```
 
 If the user is working from a subdirectory, pass the repository root explicitly:
 
 ```bash
 . "$AGENT_DIR/kverus.env"
-"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-common-sync/scripts/check_sync.py" --repo-root /path/to/project
+"$KVERUS_PYTHON" "$AGENT_DIR/skills/kverus-common-sync/scripts/check_sync.py" --repo-root /path/to/project
 ```
 
 ## What It Checks
