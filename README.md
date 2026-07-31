@@ -21,9 +21,6 @@ If you don't have uv installed, please follow the [official instructions](https:
 uv sync
 ```
 
-> [!NOTE]
-> The Python environment is optional. `kverus-strip` uses `tree-sitter-verus` (bundled under `deps/tree-sitter-verus`) to parse Verus code more precisely, but it can also fall back to a text-based parser without it. If you do not use an accurate `kverus-strip`, you can skip this step.
-
 #### 2. Install Verus
 
 KVerus depends on the [Verus](https://github.com/verus-lang/verus/) command-line tool. See the official [installation guide](https://github.com/verus-lang/verus/blob/main/INSTALL.md).

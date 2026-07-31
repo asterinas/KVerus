@@ -434,10 +434,9 @@ try:
             return {"functions": self.map_func_info}
 
 except ImportError:
-    print(
-        "WARN: tree-sitter-verus unavailable; falling back to text-based parsing "
-        "(asserts only)."
-    )
+    # Default mode requires tree-sitter-verus; main() errors out if it is missing
+    # unless --text-only was passed. Keep SimplifyParser/FunctionRangeParser as None
+    # so --text-only mode (CompatSimplifyParser + fallback ranges) still works.
     SimplifyParser = None
     FunctionRangeParser = None
 
@@ -511,8 +510,8 @@ class CompatSimplifyParser:
         self.asserts = discover_asserts(masked, self.code)
 
 
-def simplify_parser_from_code(code: str):
-    parser_type = SimplifyParser or CompatSimplifyParser
+def simplify_parser_from_code(code: str, text_only: bool = False):
+    parser_type = CompatSimplifyParser if text_only else SimplifyParser
     parser = parser_type.from_code(code)
     parser.parse()
     return parser
@@ -1040,8 +1039,12 @@ def dedupe_ranges(ranges: list[FunctionRange]) -> list[FunctionRange]:
     return out
 
 
-def discover_function_ranges(path: Path, text: str) -> list[FunctionRange]:
-    ranges = treesitter_function_ranges(path, text)
+def discover_function_ranges(
+    path: Path, text: str, text_only: bool = False
+) -> list[FunctionRange]:
+    ranges: list[FunctionRange] = []
+    if not text_only:
+        ranges = treesitter_function_ranges(path, text)
     if ranges:
         return ranges
     ranges = fallback_function_ranges(path, text)
@@ -1115,8 +1118,9 @@ def candidate_ranges_from_code(
     source_text: str,
     range_start: int,
     deep_clean: bool,
+    text_only: bool = False,
 ) -> tuple[list[CandidateRange], bool]:
-    parser = simplify_parser_from_code(code)
+    parser = simplify_parser_from_code(code, text_only=text_only)
     has_external_body = any(
         "verifier::external_body"
         in (
@@ -1204,6 +1208,7 @@ def simplify_file(
     batch: bool,
     functions: list[str] | None = None,
     modified_hunks_map: dict[Path, list[tuple[int, int]]] | None = None,
+    text_only: bool = False,
 ) -> SimplifyStats:
     stats = SimplifyStats(files_processed=1)
     try:
@@ -1212,7 +1217,7 @@ def simplify_file(
         print(f"WARN: skipping non-UTF-8 file: {relative_to_repo(repo_root, path)}")
         return stats
 
-    ranges = discover_function_ranges(path, text)
+    ranges = discover_function_ranges(path, text, text_only=text_only)
     if functions:
         ranges = [
             fn_range
@@ -1261,6 +1266,7 @@ def simplify_file(
             text,
             function_range.start,
             deep_clean,
+            text_only=text_only,
         )
         if skipped_unproven:
             stats.functions_skipped_unproven += 1
@@ -1538,6 +1544,15 @@ def parse_args() -> argparse.Namespace:
             "proof code."
         ),
     )
+    parser.add_argument(
+        "--text-only",
+        action="store_true",
+        help=(
+            "Use text-based parsing only (asserts-only), without tree-sitter-verus. "
+            "The default mode requires tree-sitter-verus installed; pass this flag "
+            "to opt into the lower-precision text fallback for environments without it."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1551,6 +1566,15 @@ def main() -> int:
         return 0
     if not verify_command:
         verify_command = "true"
+
+    if not args.text_only and SimplifyParser is None:
+        print(
+            "ERROR: tree-sitter-verus is required for the default mode but is not "
+            "available. Install it (e.g. `cd <KVerus repo> && uv sync`), or pass "
+            "--text-only for text-based (asserts-only) parsing.",
+            file=sys.stderr,
+        )
+        return 1
 
     files = collect_files(args, repo_root)
     if not files:
@@ -1575,6 +1599,7 @@ def main() -> int:
                 batch=args.batch,
                 functions=function_names,
                 modified_hunks_map=modified_hunks_map,
+                text_only=args.text_only,
             )
         )
 
