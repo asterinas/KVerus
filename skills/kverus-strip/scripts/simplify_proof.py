@@ -73,7 +73,7 @@ try:
 
         @classmethod
         def from_file(cls, path_file: Path):
-            verus_code = path_file.read_text()
+            verus_code = path_file.read_text(encoding="utf-8")
             instance = cls(verus_code)
             instance.filename = str(path_file)
             return instance
@@ -350,7 +350,7 @@ try:
 
         @classmethod
         def from_file(cls, path_file: Path):
-            verus_code = path_file.read_text()
+            verus_code = path_file.read_text(encoding="utf-8")
             instance = cls(verus_code)
             instance.filename = str(path_file)
             return instance
