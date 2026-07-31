@@ -6,9 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "loguru>=0.7.2",
-    "parse>=1.20.2",
-    "tiktoken>=0.8.0",
-    "promex-verus",
+    "tree-sitter>=0.25.2",
+    "tree-sitter-verus",
 ]
 
 [dependency-groups]
@@ -17,8 +16,8 @@ dev = ["requests>=2.32.4", "deptry>=0.23.1", "pre-commit>=4.3.0"]
 [tool.uv]
 index-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 
-[tool.uv.workspace]
-members = ["processor/promex-verus"]
-
 [tool.uv.sources]
-promex-verus = { workspace = true }
+tree-sitter-verus = { path = "deps/tree-sitter-verus" }
+
+[tool.deptry]
+exclude = ["\\.venv", "deps"]

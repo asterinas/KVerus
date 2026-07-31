@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 import argparse
 import re
 import subprocess
@@ -12,13 +13,433 @@ from pathlib import Path
 from typing import Iterable
 
 try:
-    from simplify_verus import SimplifyParser as ExternalSimplifyParser  # type: ignore
+    from tree_sitter import Language, Parser, Node
+    import tree_sitter_verus
+    from loguru import logger
+
+    VERUS_LANGUAGE = Language(tree_sitter_verus.language())
+
+    class _BaseParser(ABC):
+        """Minimal tree-sitter base parser shared by the inlined Verus parsers."""
+
+        def __init__(self, verus_code: str, language):
+            self.parser = Parser(language)
+            tree = self.parser.parse(verus_code.encode())
+            self.root_node = tree.root_node
+            self.filename = "<unknown>"
+            self.depth = 0
+
+        def parse(self):
+            self._traverse(self.root_node)
+
+        @abstractmethod
+        def _traverse(self, node: Node):
+            pass
+
+        @staticmethod
+        def _get_name(node) -> str:
+            """Extract the name from the node."""
+            for child in node.children:
+                if child.type == "identifier":
+                    return child.text.decode()
+            return ""
+
+        def _get_start(self, node) -> str:
+            start_byte, start_point = node.start_byte, node.start_point
+            return f"{self.filename}:{start_point[0]+1}:{start_point[1]+1}"
+
+        def _get_end(self, node) -> str:
+            end_byte, end_point = node.end_byte, node.end_point
+            return f"{self.filename}:{end_point[0]+1}:{end_point[1]+1}"
+
+    class SimplifyParser(_BaseParser):
+        """
+        A simple AST Parser for Verus code using tree_sitter
+        """
+
+        def __init__(self, verus_code: str):
+            self.asserts = list()
+            self._seen_assert_ranges = set()
+            self.calls = list()
+            self._seen_call_ranges = set()
+            self.attributes = list()
+            self.admits = list()
+            self.assumes = list()
+            super().__init__(verus_code, VERUS_LANGUAGE)
+
+        @classmethod
+        def from_code(cls, code: str):
+            return cls(code)
+
+        @classmethod
+        def from_file(cls, path_file: Path):
+            verus_code = path_file.read_text()
+            instance = cls(verus_code)
+            instance.filename = str(path_file)
+            return instance
+
+        def _extract_assert(
+            self,
+            node: Node,
+            *,
+            start_byte: int | None = None,
+            end_byte: int | None = None,
+            text_override: str | None = None,
+        ) -> dict:
+            # Safely obtain text from the node: handle None, bytes, and str,
+            # and fall back to reading the file slice if text is not available.
+            text = (
+                text_override
+                if text_override is not None
+                else getattr(node, "text", None)
+            )
+            if text is None:
+                logger.warning("Node text is None, attempting to read from file.")
+                try:
+                    file_bytes = Path(self.filename).read_bytes()
+                    actual_start = node.start_byte if start_byte is None else start_byte
+                    actual_end = node.end_byte if end_byte is None else end_byte
+                    text = file_bytes[actual_start:actual_end].decode()
+                except Exception:
+                    text = ""
+            elif isinstance(text, bytes):
+                text = text.decode()
+            elif not isinstance(text, str):
+                text = str(text)
+            actual_start = node.start_byte if start_byte is None else start_byte
+            actual_end = node.end_byte if end_byte is None else end_byte
+            return {"assert": text, "start": actual_start, "end": actual_end}
+
+        @staticmethod
+        def _decode_node_text(node: Node) -> str:
+            text = getattr(node, "text", None)
+            if isinstance(text, bytes):
+                return text.decode()
+            if isinstance(text, str):
+                return text
+            if text is None:
+                return ""
+            return str(text)
+
+        def _append_assert(self, node: Node, **kwargs):
+            dict_assert = self._extract_assert(node, **kwargs)
+            location = (dict_assert["start"], dict_assert["end"])
+            if location not in self._seen_assert_ranges:
+                self._seen_assert_ranges.add(location)
+                self.asserts.append(dict_assert)
+
+        @classmethod
+        def _is_proof_context(cls, node: Node) -> bool:
+            current = node.parent
+            while current is not None:
+                if current.type in {
+                    "proof_block",
+                    "assert_by_expression",
+                    "assert_by_block_expression",
+                    "assert_forall_expression",
+                }:
+                    return True
+                if current.type == "function_item":
+                    return any(
+                        child.type == "function_mode"
+                        and cls._decode_node_text(child).strip() == "proof"
+                        for child in current.children
+                    )
+                current = current.parent
+            return False
+
+        def _append_call_statement(
+            self,
+            node: Node,
+            *,
+            start_byte: int | None = None,
+            end_byte: int | None = None,
+            text_override: str | None = None,
+        ):
+            statement = node.parent
+            if statement is None or statement.type != "expression_statement":
+                return
+            actual_start = statement.start_byte if start_byte is None else start_byte
+            actual_end = statement.end_byte if end_byte is None else end_byte
+            location = (actual_start, actual_end)
+            if location in self._seen_call_ranges:
+                return
+            text = (
+                self._decode_node_text(statement)
+                if text_override is None
+                else text_override
+            )
+            self._seen_call_ranges.add(location)
+            self.calls.append(
+                {
+                    "call": text,
+                    "start": actual_start,
+                    "end": actual_end,
+                    "is_proof": self._is_proof_context(node),
+                }
+            )
+
+        def _parse_macro_token_tree(
+            self, token_tree: Node, original_start_byte: int | None = None
+        ):
+            token_text = self._decode_node_text(token_tree)
+            if len(token_text) < 2:
+                return
+
+            inner_text = token_text[1:-1]
+            token_start = (
+                token_tree.start_byte
+                if original_start_byte is None
+                else original_start_byte
+            )
+            prefix = "verus! { fn __kverus_macro_probe() {"
+            suffix = "} }"
+            wrapped_source = f"{prefix}{inner_text}{suffix}"
+            wrapped_tree = self.parser.parse(wrapped_source.encode())
+            self._traverse_macro_tree(
+                wrapped_tree.root_node,
+                token_start + 1,
+                len(prefix.encode()),
+            )
+
+            for child in token_tree.children:
+                if child.type == "token_tree":
+                    nested_original_start = token_start + (
+                        child.start_byte - token_tree.start_byte
+                    )
+                    self._parse_macro_token_tree(child, nested_original_start)
+
+        def _traverse_macro_tree(
+            self, node: Node, original_base: int, wrapped_prefix_len: int
+        ):
+            for child in node.children:
+                if child.type in {
+                    "assert_expression",
+                    "assert_by_expression",
+                    "assert_by_block_expression",
+                    "assert_forall_expression",
+                    "assert_macro_call",
+                }:
+                    mapped_start = original_base + child.start_byte - wrapped_prefix_len
+                    mapped_end = original_base + child.end_byte - wrapped_prefix_len
+                    self._append_assert(
+                        child,
+                        start_byte=mapped_start,
+                        end_byte=mapped_end,
+                        text_override=self._decode_node_text(child),
+                    )
+                elif child.type == "call_expression":
+                    statement = child.parent
+                    if (
+                        statement is not None
+                        and statement.type == "expression_statement"
+                    ):
+                        mapped_start = (
+                            original_base + statement.start_byte - wrapped_prefix_len
+                        )
+                        mapped_end = (
+                            original_base + statement.end_byte - wrapped_prefix_len
+                        )
+                        self._append_call_statement(
+                            child,
+                            start_byte=mapped_start,
+                            end_byte=mapped_end,
+                            text_override=self._decode_node_text(statement),
+                        )
+                elif child.type == "macro_invocation":
+                    for macro_child in child.children:
+                        if macro_child.type == "token_tree":
+                            mapped_start = (
+                                original_base
+                                + macro_child.start_byte
+                                - wrapped_prefix_len
+                            )
+                            self._parse_macro_token_tree(macro_child, mapped_start)
+                self._traverse_macro_tree(child, original_base, wrapped_prefix_len)
+
+        def _extract_attribute(self, node: Node) -> dict:
+            # Safely obtain text from the node: handle None, bytes, and str,
+            # and fall back to reading the file slice if text is not available.
+            text = getattr(node, "text", None)
+            if text is None:
+                logger.warning("Node text is None, attempting to read from file.")
+                try:
+                    file_bytes = Path(self.filename).read_bytes()
+                    text = file_bytes[node.start_byte : node.end_byte].decode()
+                except Exception:
+                    text = ""
+            elif isinstance(text, bytes):
+                text = text.decode()
+            elif not isinstance(text, str):
+                text = str(text)
+            return {"attribute": text, "start": node.start_byte, "end": node.end_byte}
+
+        def _extract_admit(self, node: Node) -> dict:
+            text = getattr(node, "text", None)
+            if text is None:
+                logger.warning("Node text is None, attempting to read from file.")
+                try:
+                    file_bytes = Path(self.filename).read_bytes()
+                    text = file_bytes[node.start_byte : node.end_byte].decode()
+                except Exception:
+                    text = ""
+            elif isinstance(text, bytes):
+                text = text.decode()
+            elif not isinstance(text, str):
+                text = str(text)
+            return {"admit": text, "start": node.start_byte, "end": node.end_byte}
+
+        def _extract_assume(self, node: Node) -> dict:
+            text = getattr(node, "text", None)
+            if text is None:
+                logger.warning("Node text is None, attempting to read from file.")
+                try:
+                    file_bytes = Path(self.filename).read_bytes()
+                    text = file_bytes[node.start_byte : node.end_byte].decode()
+                except Exception:
+                    text = ""
+            elif isinstance(text, bytes):
+                text = text.decode()
+            elif not isinstance(text, str):
+                text = str(text)
+            return {"assume": text, "start": node.start_byte, "end": node.end_byte}
+
+        def _traverse(self, node: Node):
+            for child in node.children:
+                if child.type in {
+                    "assert_expression",
+                    "assert_by_expression",
+                    "assert_by_block_expression",
+                    "assert_forall_expression",
+                    "assert_macro_call",
+                }:
+                    self._append_assert(child)
+                elif child.type == "call_expression":
+                    self._append_call_statement(child)
+                elif child.type == "attribute":
+                    dict_attribute = self._extract_attribute(child)
+                    self.attributes.append(dict_attribute)
+                elif child.type == "call_expression":
+                    if self._get_name(child) == "admit":
+                        dict_admit = self._extract_admit(child)
+                        self.admits.append(dict_admit)
+                elif child.type == "assume_expression":
+                    dict_assume = self._extract_assume(child)
+                    self.assumes.append(dict_assume)
+                elif child.type == "macro_invocation":
+                    for macro_child in child.children:
+                        if macro_child.type == "token_tree":
+                            self._parse_macro_token_tree(macro_child)
+
+                self.depth += 1
+                self._traverse(child)
+            self.depth -= 1
+
+    class FunctionRangeParser(_BaseParser):
+        """Extract function impl_range boundaries using tree-sitter.
+
+        A slimmed-down inlined tree-sitter function-range parser: it only collects
+        each function's impl_range (start including preceding doc comments, end at
+        the function_item), which is all simplify_proof.py needs for function
+        scoping. Struct/enum/trait/impl extraction is intentionally omitted.
+        """
+
+        def __init__(self, verus_code: str):
+            super().__init__(verus_code, VERUS_LANGUAGE)
+            self.map_func_info: dict[str, dict] = {}
+
+        @classmethod
+        def from_file(cls, path_file: Path):
+            verus_code = path_file.read_text()
+            instance = cls(verus_code)
+            instance.filename = str(path_file)
+            return instance
+
+        def _get_declaration_start(self, node: Node) -> Node:
+            """Get the start node of a declaration, including preceding doc comments.
+
+            Doc comments (///) are sibling nodes that appear before declaration_with_attrs,
+            so we need to look at the parent's children to find them.
+            Regular comments (//) are ignored.
+            """
+            if not node.parent:
+                return node
+
+            # Find the index of the current node in parent's children
+            parent = node.parent
+            node_index = None
+            for i, child in enumerate(parent.children):
+                if child == node:
+                    node_index = i
+                    break
+
+            if node_index is None:
+                return node
+
+            # Look backwards for doc comments
+            start_index = node_index
+            for i in range(node_index - 1, -1, -1):
+                child = parent.children[i]
+                # Check if this is a doc comment (has outer_doc_comment_marker child)
+                is_doc_comment = False
+                if child.type == "line_comment":
+                    for grandchild in child.children:
+                        if grandchild.type == "outer_doc_comment_marker":
+                            is_doc_comment = True
+                            break
+                elif child.type == "block_comment":
+                    # Block doc comments also exist
+                    for grandchild in child.children:
+                        if grandchild.type in [
+                            "outer_doc_comment_marker",
+                            "inner_doc_comment_marker",
+                        ]:
+                            is_doc_comment = True
+                            break
+
+                if is_doc_comment:
+                    start_index = i
+                else:
+                    # Stop if we hit a non-doc-comment node
+                    break
+
+            # Return the first doc comment node if found, otherwise the original node
+            return parent.children[start_index] if start_index < node_index else node
+
+        def _extract_function_range(self, node: Node):
+            """Record impl_range for a declaration_with_attrs wrapping a function_item."""
+            func_node = None
+            for child in node.children:
+                if child.type == "function_item":
+                    func_node = child
+                    break
+
+            if not func_node:
+                return
+
+            start_node = self._get_declaration_start(node)
+            location = self._get_start(start_node)
+            impl_range = [self._get_start(start_node), self._get_end(func_node)]
+            self.map_func_info[location] = {"impl_range": impl_range}
+
+        def _traverse(self, node: Node):
+            if node.type == "declaration_with_attrs":
+                for child in node.children:
+                    if child.type == "function_item":
+                        self._extract_function_range(node)
+            for child in node.children:
+                self._traverse(child)
+
+        def get(self) -> dict:
+            return {"functions": self.map_func_info}
+
 except ImportError:
     print(
-        "WARN: promex-verus unavailable; falling back to text-based parsing "
+        "WARN: tree-sitter-verus unavailable; falling back to text-based parsing "
         "(asserts only)."
     )
-    ExternalSimplifyParser = None
+    SimplifyParser = None
+    FunctionRangeParser = None
 
 
 @dataclass(frozen=True)
@@ -91,7 +512,7 @@ class CompatSimplifyParser:
 
 
 def simplify_parser_from_code(code: str):
-    parser_type = ExternalSimplifyParser or CompatSimplifyParser
+    parser_type = SimplifyParser or CompatSimplifyParser
     parser = parser_type.from_code(code)
     parser.parse()
     return parser
@@ -182,7 +603,9 @@ def changed_rs_files(repo_root: Path, base: str | None) -> list[Path]:
     return files
 
 
-def modified_hunks(repo_root: Path, base: str | None) -> dict[Path, list[tuple[int, int]]]:
+def modified_hunks(
+    repo_root: Path, base: str | None
+) -> dict[Path, list[tuple[int, int]]]:
     """Return added-line ranges (1-based, inclusive) per file from `git diff`.
 
     Combines committed-diff (`base...HEAD`) and worktree diff. A function range
@@ -217,9 +640,7 @@ def modified_hunks(repo_root: Path, base: str | None) -> dict[Path, list[tuple[i
     return hunks
 
 
-def range_line_span(
-    text: str, byte_start: int, byte_end: int
-) -> tuple[int, int]:
+def range_line_span(text: str, byte_start: int, byte_end: int) -> tuple[int, int]:
     """Return the (first, last) 1-based line numbers spanned by a byte range."""
     start_line = byte_to_line_col(text, byte_start)[0]
     end_line = byte_to_line_col(text, max(byte_start, byte_end - 1))[0]
@@ -570,21 +991,19 @@ def parse_location_line(location: str) -> tuple[str | None, int, int]:
     return match.group(1), int(match.group(2)), int(match.group(3))
 
 
-def promex_function_ranges(path: Path, text: str) -> list[FunctionRange]:
-    try:
-        from promex_verus import VerusParser  # type: ignore
-    except ImportError:
+def treesitter_function_ranges(path: Path, text: str) -> list[FunctionRange]:
+    if FunctionRangeParser is None:
         return []
 
     try:
-        parser = VerusParser.from_file(path.resolve())
+        parser = FunctionRangeParser.from_file(path.resolve())
         parser.parse()
         result = parser.get()
     except (
         Exception
     ) as err:  # pragma: no cover - parser availability is environment-specific.
         print(
-            f"INFO: promex_verus could not parse {path}: {err}; using fallback parser."
+            f"INFO: tree-sitter-verus could not parse {path}: {err}; using fallback parser."
         )
         return []
 
@@ -622,7 +1041,7 @@ def dedupe_ranges(ranges: list[FunctionRange]) -> list[FunctionRange]:
 
 
 def discover_function_ranges(path: Path, text: str) -> list[FunctionRange]:
-    ranges = promex_function_ranges(path, text)
+    ranges = treesitter_function_ranges(path, text)
     if ranges:
         return ranges
     ranges = fallback_function_ranges(path, text)
@@ -634,7 +1053,7 @@ def discover_function_ranges(path: Path, text: str) -> list[FunctionRange]:
 def function_name_from_label(label: str) -> str:
     """Best-effort short function name from a FunctionRange label.
 
-    Promex labels are file:line:col locations, while the fallback parser uses
+    tree-sitter labels are file:line:col locations, while the fallback parser uses
     the same shape. Neither carries the bare name, so callers that need a name
     use `function_name_from_slice` on the code instead.
     """
@@ -668,7 +1087,7 @@ def match_function_filter(
     """Return whether `function_range` should be processed given `needles`.
 
     A needle matches if it equals the function's short name, or appears as a
-    path segment in the promex location label (so qualified names like
+    path segment in the location label (so qualified names like
     `Impl::lemma_foo` also work).
     """
     if not needles:
@@ -800,9 +1219,7 @@ def simplify_file(
             for fn_range in ranges
             if match_function_filter(
                 fn_range,
-                text.encode("utf-8")[
-                    fn_range.start : fn_range.end
-                ].decode("utf-8"),
+                text.encode("utf-8")[fn_range.start : fn_range.end].decode("utf-8"),
                 functions,
             )
         ]

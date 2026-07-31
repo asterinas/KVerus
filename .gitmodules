@@ -1,3 +1,3 @@
-[submodule "processor/promex-verus"]
-	path = processor/promex-verus
-	url = git@github.com:Marsman1996/promex-verus.git
+[submodule "deps/tree-sitter-verus"]
+	path = deps/tree-sitter-verus
+	url = https://github.com/secure-foundations/tree-sitter-verus.git

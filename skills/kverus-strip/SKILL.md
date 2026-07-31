@@ -43,7 +43,7 @@ python3 "$AGENT_DIR/skills/kverus-strip/scripts/simplify_proof.py" \
   --format-command '<format command>'
 ```
 
-The script scans changed `.rs` files when no `--target-dir` or `--file` is provided. It simplifies at function scope, matches the `src/refiner/simplifier.py` policy, skips runtime `assert!(...)`, never removes `assert(false)`, skips functions containing `admit`, `assume`, or `#[verifier::external_body]` unless `--deep-clean` is set, removes one proof statement at a time, and keeps the removal only when the verification command still succeeds. With `promex-verus`, candidates include standalone function-call statements in `proof fn`, `proof {}`, and assertion proof blocks; executable calls are extracted but never offered for deletion. Without `promex-verus`, the compatibility parser simplifies assertions only. Use `--dry-run` to list candidates without editing.
+The script scans changed `.rs` files when no `--target-dir` or `--file` is provided. It simplifies at function scope, matches the `src/refiner/simplifier.py` policy, skips runtime `assert!(...)`, never removes `assert(false)`, skips functions containing `admit`, `assume`, or `#[verifier::external_body]` unless `--deep-clean` is set, removes one proof statement at a time, and keeps the removal only when the verification command still succeeds. With `tree-sitter-verus`, candidates include standalone function-call statements in `proof fn`, `proof {}`, and assertion proof blocks; executable calls are extracted but never offered for deletion. Without `tree-sitter-verus`, the compatibility parser simplifies assertions only. Use `--dry-run` to list candidates without editing.
 
 To simplify a single function (or a few) instead of a whole file or directory, point `--target-dir` at the file and pass `--function` (repeatable, or comma-separated). Only functions whose short name matches are processed; every other function in the file is left untouched:
 
@@ -61,7 +61,7 @@ To restrict stripping to only the functions you actually changed in this diff, p
 
 `--function` and `--modified-only` compose: a function is processed only if it matches the `--function` filter **and** overlaps an added diff hunk.
 
-Before running the script, check whether `promex-verus` is available. If it is
+Before running the script, check whether `tree-sitter-verus` is available. If it is
 unavailable, explicitly warn the user that full proof-call simplification is
 disabled, recommend installing it from the KVerus repository root with `uv sync`,
 and state that the script will fall back to assertions-only compatibility parsing.

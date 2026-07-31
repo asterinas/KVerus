@@ -22,7 +22,7 @@ uv sync
 ```
 
 > [!NOTE]
-> The Python environment is optional. `kverus-strip` uses `treesitter-verus` to parse Verus code more precisely, but it can also fall back to an LLM-based path without it. If you do not use an accurate `kverus-strip`, you can skip this step.
+> The Python environment is optional. `kverus-strip` uses `tree-sitter-verus` (bundled under `deps/tree-sitter-verus`) to parse Verus code more precisely, but it can also fall back to a text-based parser without it. If you do not use an accurate `kverus-strip`, you can skip this step.
 
 #### 2. Install Verus
 
@@ -137,7 +137,7 @@ This case focuses on the three core stages: migration, specification, and verifi
 
 [asterinas/vostd#633](https://github.com/asterinas/vostd/pull/633) demonstrates `kverus-strip` on `specs::mm::page_table::cursor::cursor_steps`. The skill simplified a single Rust source file, removing 1,075 lines of redundant proof code while keeping verification passing.
 
-This showcase uses `promex-verus` for full proof-call discovery. Before starting the agent, install the repository's Python dependencies and, when invoking the skill, give the Python virtual environment path to the LLM, for example `.venv/bin`.
+This showcase uses `tree-sitter-verus` for full proof-call discovery. Before starting the agent, install the repository's Python dependencies and, when invoking the skill, give the Python virtual environment path to the LLM, for example `.venv/bin`.
 
 ## Cite
 If you find KVerus useful in your research, please consider citing our ASE 2026 paper:
