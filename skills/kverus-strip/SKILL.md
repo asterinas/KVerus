@@ -36,7 +36,8 @@ If understanding Verus proof constructs (proof blocks, ghost/tracked values, spe
 For routine redundant proof-statement cleanup, prefer the bundled script before manual stripping:
 
 ```bash
-python3 "$AGENT_DIR/skills/kverus-strip/scripts/simplify_proof.py" \
+. "$AGENT_DIR/kverus.env"
+"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-strip/scripts/simplify_proof.py" \
   --base <git-base> \
   --target-dir '<dir1,dir2>' \
   --verify-command '<verification command>' \
@@ -48,7 +49,8 @@ The script scans changed `.rs` files when no `--target-dir` or `--file` is provi
 To simplify a single function (or a few) instead of a whole file or directory, point `--target-dir` at the file and pass `--function` (repeatable, or comma-separated). Only functions whose short name matches are processed; every other function in the file is left untouched:
 
 ```bash
-python3 "$AGENT_DIR/skills/kverus-strip/scripts/simplify_proof.py" \
+. "$AGENT_DIR/kverus.env"
+"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-strip/scripts/simplify_proof.py" \
   --target-dir '<path/to/file.rs>' \
   --function '<function_name>[,<other_name>]' \
   --verify-command '<verification command>' \
@@ -61,10 +63,14 @@ To restrict stripping to only the functions you actually changed in this diff, p
 
 `--function` and `--modified-only` compose: a function is processed only if it matches the `--function` filter **and** overlaps an added diff hunk.
 
-Before running the script, check whether `tree-sitter-verus` is available. If it is
-unavailable, explicitly warn the user that full proof-call simplification is
-disabled, recommend installing it from the KVerus repository root with `uv sync`,
-and state that the script will fall back to assertions-only compatibility parsing.
+`tree-sitter-verus` ships in the KVerus venv referenced by `kverus.env` (the install
+script checks it). Run the script with that venv's Python
+(`$KVERUS_ROOT/.venv/bin/python`, set up by sourcing `$AGENT_DIR/kverus.env`) and full
+proof-call simplification is active automatically — no manual availability check is
+needed. If the venv is ever unavailable, the script still runs and falls back to
+assertions-only parsing; always run the script rather than substituting manual
+stripping, since only the script performs the delete→verify→restore safety loop per
+candidate.
 
 While the script is running, do not repeatedly narrate unchanged status or
 reprint its output. Poll silently at coarse intervals. Report only when the

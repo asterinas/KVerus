@@ -12,13 +12,15 @@ Use this skill to audit the installed `kverus-common` skill against the local Ve
 Run the checker from the repository root:
 
 ```bash
-python3 "$AGENT_DIR/skills/kverus-common-sync/scripts/check_sync.py"
+. "$AGENT_DIR/kverus.env"
+"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-common-sync/scripts/check_sync.py"
 ```
 
 If the user is working from a subdirectory, pass the repository root explicitly:
 
 ```bash
-python3 "$AGENT_DIR/skills/kverus-common-sync/scripts/check_sync.py" --repo-root /path/to/project
+. "$AGENT_DIR/kverus.env"
+"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-common-sync/scripts/check_sync.py" --repo-root /path/to/project
 ```
 
 ## What It Checks

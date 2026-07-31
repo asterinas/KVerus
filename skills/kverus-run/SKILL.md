@@ -215,7 +215,8 @@ After scoring each file:
 3. Run the bundled diff collector:
 
    ```bash
-   python3 "$AGENT_DIR/skills/kverus-semantic-audit/scripts/collect_exec_diffs.py" \
+   . "$AGENT_DIR/kverus.env"
+"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-semantic-audit/scripts/collect_exec_diffs.py" \
      --rust-dir "$ORIG_DIR" \
      --verus-dir <verus_dir> \
      --out-dir <out_dir>/audit

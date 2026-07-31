@@ -31,7 +31,8 @@ This skill is not a style review and not a proof review. Ignore differences that
 1. Run the bundled diff collector:
 
    ```bash
-   python3 "$AGENT_DIR/skills/kverus-semantic-audit/scripts/collect_exec_diffs.py" \
+   . "$AGENT_DIR/kverus.env"
+"$KVERUS_ROOT/.venv/bin/python" "$AGENT_DIR/skills/kverus-semantic-audit/scripts/collect_exec_diffs.py" \
      --rust-dir <rust_dir> \
      --verus-dir <verus_dir> \
      --out-dir <out_dir>
