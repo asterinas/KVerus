@@ -526,6 +526,7 @@ def run_git(
         ["git", *args],
         cwd=repo_root,
         check=check,
+        encoding="utf-8",
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -536,6 +537,7 @@ def git_root() -> Path:
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         check=False,
+        encoding="utf-8",
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1186,6 +1188,7 @@ def run_shell(
         command,
         cwd=cwd,
         shell=True,
+        encoding="utf-8",
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

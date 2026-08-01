@@ -119,6 +119,7 @@ def run_git(args: list[str], check: bool = True) -> subprocess.CompletedProcess[
     return subprocess.run(
         ["git", *args],
         check=check,
+        encoding="utf-8",
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -204,7 +205,8 @@ def collect_dynamic_rules(rule_repo: str, recent_prs: int, timeout: int) -> dict
     }
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_file_for_rule_repo(rule_repo).write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
     return payload
 
@@ -259,7 +261,7 @@ def load_cached_rules(rule_repo: str) -> dict | None:
     if not cache_file.exists():
         return None
     try:
-        return json.loads(cache_file.read_text())
+        return json.loads(cache_file.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
 
