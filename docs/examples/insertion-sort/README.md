@@ -1,9 +1,61 @@
 # Verified Insertion Sort Example
 
-This example records an actual KVerus run from an ordinary, variable-length Rust insertion sort to verified Verus. It was generated in an isolated Git repository without consulting an existing verified sorting solution.
+This example records an actual KVerus run from a variable-length Rust insertion sort to verified Verus code. It was generated in an isolated Git repository without consulting an existing verified sorting solution.
 
 - [`insertion_sort.rs`](insertion_sort.rs) is the original executable Rust input.
 - [`insertion_sort_verus.rs`](insertion_sort_verus.rs) is the final KVerus output.
+
+## How Verus and KVerus Work Together
+
+[Verus](https://github.com/verus-lang/verus/) extends Rust with specifications such as preconditions, postconditions, and loop invariants. It statically proves that the executable code satisfies those specifications for every possible execution; specifications and proof code are erased from the executable.
+
+KVerus automates the work around that checker. It migrates Rust code to Verus, proposes the properties the code should satisfy, generates proof scaffolding, and repairs verification failures. Verus remains the independent checker, so a KVerus run succeeds only when all proof obligations pass.
+
+```text
+Rust code
+  │
+  │ KVerus adds:
+  │   • what the code must guarantee (specifications)
+  │   • why those guarantees hold (proofs)
+  ▼
+Rust code with Verus annotations
+  │
+  │ Verus checks that the implementation satisfies the specifications
+  ▼
+Verified Rust code
+```
+
+## What This Example Proves
+
+The original insertion sort describes how to sort a vector of any length:
+
+```rust
+fn insertion_sort(nums: &mut Vec<u32>) {
+    let n = nums.len();
+    let mut i = 1;
+    while i < n {
+        let mut j = i;
+        while j > 0 && nums[j - 1] > nums[j] {
+            nums.swap(j - 1, j);
+            j -= 1;
+        }
+        i += 1;
+    }
+}
+```
+
+KVerus generated an explicit correctness contract:
+
+```rust
+spec fn sorted(s: Seq<u32>) -> bool {
+    forall|a: int, b: int| 0 <= a < b < s.len() ==> s[a] <= s[b]
+}
+
+fn insertion_sort(nums: &mut Vec<u32>)
+    ensures
+        sorted(final(nums)@),
+        final(nums)@.to_multiset() == old(nums)@.to_multiset(),
+```
 
 The generated contract proves, for every input length:
 
