@@ -2,6 +2,18 @@ use vstd::prelude::*;
 
 verus! {
 
+pub assume_specification<T>[ <[T]>::swap ](slice: &mut [T], a: usize, b: usize)
+    requires
+        a < old(slice)@.len(),
+        b < old(slice)@.len(),
+    ensures
+        final(slice)@ == old(slice)@.update(a as int, old(slice)@[b as int]).update(
+            b as int,
+            old(slice)@[a as int],
+        ),
+    no_unwind
+;
+
 spec fn sorted(s: Seq<u32>) -> bool {
     forall|a: int, b: int| 0 <= a < b < s.len() ==> s[a] <= s[b]
 }
@@ -57,11 +69,8 @@ fn insertion_sort(nums: &mut Vec<u32>)
                 nums@.to_multiset() == original.to_multiset(),
             decreases j,
         {
-            // nums.swap(j - 1, j);
             let ghost before = nums@;
-            let tmp = nums[j - 1];
-            nums[j - 1] = nums[j];
-            nums[j] = tmp;
+            nums.swap(j - 1, j);
             proof {
                 swap_preserves_multiset(before, (j - 1) as int, j as int);
             }
