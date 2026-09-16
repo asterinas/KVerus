@@ -221,7 +221,6 @@ try:
                     "assert_by_expression",
                     "assert_by_block_expression",
                     "assert_forall_expression",
-                    "assert_macro_call",
                 }:
                     mapped_start = original_base + child.start_byte - wrapped_prefix_len
                     mapped_end = original_base + child.end_byte - wrapped_prefix_len
@@ -314,7 +313,6 @@ try:
                     "assert_by_expression",
                     "assert_by_block_expression",
                     "assert_forall_expression",
-                    "assert_macro_call",
                 }:
                     self._append_assert(child)
                 elif child.type == "call_expression":
@@ -446,20 +444,16 @@ except ImportError as _import_err:
 
 try:
     from tqdm import tqdm as tqdm_class
-
-    _HAS_TQDM = True
-except ImportError:  # pragma: no cover
-    tqdm_class = None
-    _HAS_TQDM = False
+except ImportError as _import_err:  # pragma: no cover
+    raise SystemExit(
+        f"tqdm is required but failed to import: {_import_err}. "
+        f"Run `uv sync` in the KVerus repo and re-run."
+    ) from _import_err
 
 
 def _log_sink(message: str) -> None:
-    """Render a loguru record above the active tqdm bar (if any), one clean line."""
-    line = message.rstrip("\n") + "\n"
-    if _HAS_TQDM and tqdm_class is not None:
-        tqdm_class.write(line, end="")
-    else:
-        sys.stderr.write(line)
+    """Render a loguru record above the active tqdm bar, one clean line."""
+    tqdm_class.write(message.rstrip("\n") + "\n", end="")
 
 
 # Route loguru output through tqdm.write so per-step logs appear above the
@@ -468,8 +462,8 @@ logger.remove()
 logger.add(
     _log_sink,
     level="INFO",
-    format="<level>{level: <7}</level> {message}",
-    colorize=False,
+    format="<green>{time:HH:mm:ss}</green> <level>{level: <7}</level> {message}",
+    colorize=sys.stderr.isatty(),
 )
 
 
@@ -1228,31 +1222,141 @@ _VERIFY_FUNCTION_CLAUSE_RE = re.compile(
 
 
 class StripProgress:
-    """tqdm-backed progress over candidate decisions; no-op when tqdm is absent."""
+    """tqdm-backed progress over candidate decisions."""
 
-    def __init__(self, desc: str = "strip", unit: str = "cand") -> None:
-        self._bar = (
-            tqdm_class(total=0, desc=desc, unit=unit, dynamic_ncols=True, leave=True)
-            if _HAS_TQDM and tqdm_class is not None
-            else None
+    def __init__(self, desc: str = "strip", unit: str = "cand", total: int = 0) -> None:
+        self._bar = tqdm_class(
+            total=total, desc=desc, unit=unit, dynamic_ncols=True, leave=True
         )
 
-    def add_total(self, n: int) -> None:
-        if self._bar is not None and n:
-            self._bar.total += n
-            self._bar.refresh()
-
     def advance(self, n: int = 1) -> None:
-        if self._bar is not None:
-            self._bar.update(n)
+        self._bar.update(n)
 
     def set_description(self, desc: str) -> None:
-        if self._bar is not None:
-            self._bar.set_description(desc)
+        self._bar.set_description(desc)
 
     def close(self) -> None:
-        if self._bar is not None:
-            self._bar.close()
+        self._bar.close()
+
+
+@dataclass(frozen=True)
+class RangePlan:
+    """Pre-strip function ranges for one file plus filter diagnostics.
+
+    The diagnostics feed the per-file scan log emitted once in the discover
+    pass, not re-emitted during the strip pass.
+    """
+
+    ranges: list[FunctionRange]
+    raw_count: int
+    function_filtered: int | None
+    modified_before: int | None
+    modified_after: int | None
+    has_added_hunks: bool | None
+
+
+def compute_function_ranges(
+    path: Path,
+    text: str,
+    functions: list[str] | None = None,
+    modified_hunks_map: dict[Path, list[tuple[int, int]]] | None = None,
+) -> RangePlan:
+    """Apply the --function and --modified-only filters to a file's functions.
+
+    Pure parse, no verify, no edit -- shared by the sizing (discover) pass and
+    the strip pass so their views of which functions are in scope stay identical.
+    """
+    ranges = discover_function_ranges(path, text)
+    raw_count = len(ranges)
+    function_filtered: int | None = None
+    if functions:
+        ranges = [
+            fn_range
+            for fn_range in ranges
+            if match_function_filter(
+                fn_range,
+                text.encode("utf-8")[fn_range.start : fn_range.end].decode("utf-8"),
+                functions,
+            )
+        ]
+        function_filtered = len(ranges)
+    modified_before: int | None = None
+    modified_after: int | None = None
+    has_added_hunks: bool | None = None
+    if modified_hunks_map is not None:
+        hunks = modified_hunks_map.get(path.resolve(), [])
+        modified_before = len(ranges)
+        has_added_hunks = bool(hunks)
+        if not hunks:
+            ranges = []
+        else:
+            kept: list[FunctionRange] = []
+            for fn_range in ranges:
+                first, last = range_line_span(text, fn_range.start, fn_range.end)
+                if any(
+                    not (hunk_last < first or hunk_first > last)
+                    for hunk_first, hunk_last in hunks
+                ):
+                    kept.append(fn_range)
+            ranges = kept
+        modified_after = len(ranges)
+    return RangePlan(
+        ranges=ranges,
+        raw_count=raw_count,
+        function_filtered=function_filtered,
+        modified_before=modified_before,
+        modified_after=modified_after,
+        has_added_hunks=has_added_hunks,
+    )
+
+
+def count_file_candidates(
+    repo_root: Path,
+    path: Path,
+    functions: list[str] | None,
+    modified_hunks_map: dict[Path, list[tuple[int, int]]] | None,
+    deep_clean: bool,
+) -> int:
+    """Pure-parse pass over one file: count strippable candidates (no verify, no
+    edit). Sizes the strip pass's tqdm total so its denominator is fixed up front
+    and its ETA is trustworthy; mirrors the strip pass's candidate discovery so
+    the count matches what actually gets processed."""
+    display_path = relative_to_repo(repo_root, path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return 0
+    plan = compute_function_ranges(path, text, functions, modified_hunks_map)
+    # Emit the per-file filter diagnostics once here, not again during the strip
+    # pass (which re-runs the same parse and would duplicate the lines).
+    if functions:
+        names = ", ".join(n for n in functions if n)
+        logger.info(
+            f"function filter '{names}' matched {plan.function_filtered} "
+            f"function(s) in {display_path}"
+        )
+    if modified_hunks_map is not None:
+        if not plan.has_added_hunks:
+            logger.info(
+                f"--modified-only: no added lines in {display_path}; "
+                f"skipping all functions"
+            )
+        else:
+            logger.info(
+                f"--modified-only: {plan.modified_after}/{plan.modified_before} "
+                f"function(s) overlap added diff hunks in {display_path}"
+            )
+    current_bytes = text.encode("utf-8")
+    count = 0
+    for function_range in plan.ranges:
+        code = current_bytes[function_range.start : function_range.end].decode("utf-8")
+        candidates, skipped_unproven = candidate_ranges_from_code(
+            code, text, function_range.start, deep_clean
+        )
+        if skipped_unproven:
+            continue
+        count += len(candidates)
+    return count
 
 
 def simplify_file(
@@ -1275,44 +1379,7 @@ def simplify_file(
         logger.warning(f"skipping non-UTF-8 file: {display_path}")
         return stats
 
-    ranges = discover_function_ranges(path, text)
-    if functions:
-        ranges = [
-            fn_range
-            for fn_range in ranges
-            if match_function_filter(
-                fn_range,
-                text.encode("utf-8")[fn_range.start : fn_range.end].decode("utf-8"),
-                functions,
-            )
-        ]
-        names = ", ".join(n for n in functions if n)
-        logger.info(
-            f"function filter '{names}' matched {len(ranges)} function(s) "
-            f"in {display_path}"
-        )
-    if modified_hunks_map is not None:
-        hunks = modified_hunks_map.get(path.resolve(), [])
-        if not hunks:
-            logger.info(
-                f"--modified-only: no added lines in {display_path}; "
-                f"skipping all functions"
-            )
-            ranges = []
-        else:
-            kept: list[FunctionRange] = []
-            for fn_range in ranges:
-                first, last = range_line_span(text, fn_range.start, fn_range.end)
-                if any(
-                    not (hunk_last < first or hunk_first > last)
-                    for hunk_first, hunk_last in hunks
-                ):
-                    kept.append(fn_range)
-            logger.info(
-                f"--modified-only: {len(kept)}/{len(ranges)} function(s) "
-                f"overlap added diff hunks in {display_path}"
-            )
-            ranges = kept
+    ranges = compute_function_ranges(path, text, functions, modified_hunks_map).ranges
     current_bytes = text.encode("utf-8")
     # The perf guard measures verus's Z3 rlimit count (`total smt-run: N ms, R rlimit`,
     # printed by --time), not wall time -- so cold vs warm rebuilds and machine load
@@ -1338,9 +1405,6 @@ def simplify_file(
         if skipped_unproven:
             stats.functions_skipped_unproven += 1
             continue
-
-        if progress is not None:
-            progress.add_total(len(candidates))
 
         # Per-function verify scoping: when --verify-command contains a literal
         # `{fn}` placeholder (written as `--verify-function {fn}`), substitute the
@@ -1460,7 +1524,7 @@ def simplify_file(
                     f"skipping strip"
                 )
                 continue
-            _base_ms, _rlimit_base = _parse_smt_run_stats(_base_out)
+            _, _rlimit_base = _parse_smt_run_stats(_base_out)
             if _rlimit_base is None or _rlimit_base <= 0:
                 logger.warning(
                     f"no 'total smt-run: N ms, R rlimit' in baseline output for "
@@ -1483,7 +1547,7 @@ def simplify_file(
             )
             candidate_bytes = blank_items(current_bytes, [item])
             ok, _out = verify_candidate_bytes(candidate_bytes)
-            _ms_after, _rlimit_after = _parse_smt_run_stats(_out)
+            _, _rlimit_after = _parse_smt_run_stats(_out)
             perf_held = (
                 ok
                 and _rlimit_base is not None
@@ -1741,8 +1805,29 @@ def main() -> int:
         modified_hunks(repo_root, args.base) if args.modified_only else None
     )
     perf_factor = None if args.no_perf_guard else args.perf_factor
+
+    # Discover pass: size the progress bar's denominator up front so the strip
+    # pass has a fixed total and a trustworthy ETA. Candidate counts are only
+    # known after parsing each function, and --function/--modified-only filter
+    # them further; sizing needs a pure parse over every file. No verify, no
+    # edit, so this is cheap relative to the per-candidate verify runs.
+    logger.info("discovering proof candidates to size the run...")
+    grand_total = 0
+    for path in files:
+        grand_total += count_file_candidates(
+            repo_root=repo_root,
+            path=path,
+            functions=function_names,
+            modified_hunks_map=modified_hunks_map,
+            deep_clean=args.deep_clean,
+        )
+    logger.info(
+        f"discovered {grand_total} candidate(s) across {len(files)} file(s); "
+        f"starting strip"
+    )
+
     total = SimplifyStats()
-    progress = StripProgress()
+    progress = StripProgress(total=grand_total)
     try:
         for path in files:
             total.add(
