@@ -1190,17 +1190,26 @@ def run_verify_failfast(command: str, cwd: Path, timeout: int) -> tuple[bool, st
     return ok, "".join(chunks)
 
 
-# `--time` makes verus print `total smt-run: N ms` -- the pure Z3 solve time, with no
-# cargo-rebuild / front-end floor. The perf guard measures THIS (not wall time), so
-# cold vs warm rebuilds can't pollute `--perf-factor`.
-_SMT_RUN_RE = re.compile(r"total smt-run:\s+(\d+)\s+ms")
+# `--time` makes verus print `total smt-run: N ms, R rlimit` -- R is Z3's rlimit count,
+# the deterministic resource units the solver consumed, with no cargo-rebuild /
+# front-end floor. The perf guard measures R (not wall time): rlimit counts solver
+# work in machine-independent units, so machine load, CPU frequency, warm/cold
+# caches can't pollute `--perf-factor`. (Verus scales its `--rlimit` flag at
+# 3,000,000 rlimit units per "second" of Z3 work.)
+_SMT_RUN_RE = re.compile(r"total smt-run:\s+(\d+)\s+ms(?:,\s*(\d+)\s*rlimit)?")
 
 
-def _parse_smt_run_ms(output: str) -> float | None:
-    """Return verus's total smt-run (Z3 solve) ms, or None if absent (verify killed by
-    fail-fast before printing, or `--time` not in the command)."""
+def _parse_smt_run_stats(output: str) -> tuple[float | None, int | None]:
+    """Return verus's total (smt-run wall ms, Z3 rlimit count), either possibly
+    None: the rlimit is absent on older verus without rlimit stats; both are
+    absent when the run was killed by fail-fast before printing, or when
+    cargo-verus skipped verification because the file content was unchanged."""
     match = _SMT_RUN_RE.search(output)
-    return float(match.group(1)) if match else None
+    if not match:
+        return None, None
+    ms = float(match.group(1))
+    rlimit = int(match.group(2)) if match.group(2) is not None else None
+    return ms, rlimit
 
 
 # Matches verus's --verify-function rejection emitted on failure when the supplied
@@ -1254,7 +1263,6 @@ def simplify_file(
     dry_run: bool,
     deep_clean: bool,
     perf_factor: float | None = None,
-    perf_slack: float = 0.5,
     functions: list[str] | None = None,
     modified_hunks_map: dict[Path, list[tuple[int, int]]] | None = None,
     progress: StripProgress | None = None,
@@ -1306,8 +1314,9 @@ def simplify_file(
             )
             ranges = kept
     current_bytes = text.encode("utf-8")
-    # The perf guard measures verus's pure Z3 time (`total smt-run: N ms`, printed by
-    # --time), not wall time -- so cold vs warm rebuilds don't pollute --perf-factor.
+    # The perf guard measures verus's Z3 rlimit count (`total smt-run: N ms, R rlimit`,
+    # printed by --time), not wall time -- so cold vs warm rebuilds and machine load
+    # don't pollute --perf-factor.
     if perf_factor is not None and "--time" not in verify_command:
         verify_command = f"{verify_command} --time"
     use_per_fn = "{fn}" in verify_command
@@ -1316,6 +1325,7 @@ def simplify_file(
         if use_per_fn
         else verify_command
     )
+    baseline_probes = 0  # unique trailing-newline count per baseline verify
     for function_range in ranges:
         stats.functions_processed += 1
         code = current_bytes[function_range.start : function_range.end].decode("utf-8")
@@ -1427,35 +1437,45 @@ def simplify_file(
                     raise
             return ok, output
 
-        # Measure this function's pre-strip baseline Z3 solve time (verus `--time`'s
-        # `total smt-run: N ms` -- pure Z3, no cargo/front-end floor) so the perf
-        # guard measures the REAL verification cost, robust to cold vs warm rebuilds.
-        # Done through verify_candidate_bytes so the {fn}-ambiguity fallback keeps the
-        # baseline's scope consistent with each candidate run.
+        # Measure this function's pre-strip baseline rlimit (verus `--time`'s
+        # `total smt-run: N ms, R rlimit` -- Z3's deterministic resource count) so
+        # the perf guard measures the REAL verification cost, robust to machine
+        # load and cold vs warm rebuilds. Done through verify_candidate_bytes so
+        # the {fn}-ambiguity fallback keeps the baseline's scope consistent with
+        # each candidate run.
+        # The probe suffix (extra trailing newlines, unique per baseline) forces
+        # cargo-verus to actually re-verify: re-verifying byte-identical content
+        # right after a successful run is a cached no-op that prints no stats and
+        # would silently disable the guard. Trailing newlines don't change the
+        # encoding, so the measured rlimit is the true baseline.
         if perf_factor is not None:
-            _base_ok, _base_out = verify_candidate_bytes(current_bytes)
+            baseline_probes += 1
+            _base_ok, _base_out = verify_candidate_bytes(
+                current_bytes + b"\n" * baseline_probes
+            )
+            path.write_bytes(current_bytes)
             if not _base_ok:
                 logger.warning(
                     f"baseline verify failed for {display_path}::{fn_name or 'fn'}; "
                     f"skipping strip"
                 )
                 continue
-            _z3_base = _parse_smt_run_ms(_base_out)
-            if _z3_base is None or _z3_base <= 0:
+            _base_ms, _rlimit_base = _parse_smt_run_stats(_base_out)
+            if _rlimit_base is None or _rlimit_base <= 0:
                 logger.warning(
-                    f"no 'total smt-run' in baseline output for "
-                    f"{display_path}::{fn_name or 'fn'} ('--time' missing or parse "
-                    f"failure); perf guard disabled for this function"
+                    f"no 'total smt-run: N ms, R rlimit' in baseline output for "
+                    f"{display_path}::{fn_name or 'fn'} ('--time' missing or verus "
+                    f"without rlimit stats); perf guard disabled for this function"
                 )
             else:
                 logger.info(
                     f"baseline {display_path}::{fn_name or 'fn'}: "
-                    f"smt-run {_z3_base:.0f}ms -> revert any strip whose smt-run "
-                    f"exceeds {perf_factor:g}x + {perf_slack:.2f}s = "
-                    f"{perf_factor * _z3_base + perf_slack * 1000:.0f}ms"
+                    f"rlimit {_rlimit_base} -> revert any strip whose rlimit "
+                    f"exceeds {perf_factor:g}x = "
+                    f"{perf_factor * _rlimit_base:.0f}"
                 )
         else:
-            _z3_base = None
+            _rlimit_base = None
 
         for item in candidates:
             logger.info(
@@ -1463,13 +1483,13 @@ def simplify_file(
             )
             candidate_bytes = blank_items(current_bytes, [item])
             ok, _out = verify_candidate_bytes(candidate_bytes)
-            _z3_after = _parse_smt_run_ms(_out)
+            _ms_after, _rlimit_after = _parse_smt_run_stats(_out)
             perf_held = (
                 ok
-                and _z3_base is not None
-                and _z3_base > 0
-                and _z3_after is not None
-                and _z3_after > perf_factor * _z3_base + perf_slack * 1000
+                and _rlimit_base is not None
+                and _rlimit_base > 0
+                and _rlimit_after is not None
+                and _rlimit_after > perf_factor * _rlimit_base
             )
             if ok and not perf_held:
                 current_bytes = candidate_bytes
@@ -1484,8 +1504,8 @@ def simplify_file(
                     stats.kept_as_perf_hint += 1
                     logger.info(
                         f"kept {item.kind} at {display_path}:{item.line} as perf hint "
-                        f"(smt-run {_z3_after:.0f}ms > {perf_factor:g}x baseline "
-                        f"{_z3_base:.0f}ms + {perf_slack:.2f}s)"
+                        f"(rlimit {_rlimit_after} > {perf_factor:g}x baseline "
+                        f"{_rlimit_base})"
                     )
                 else:
                     logger.info(
@@ -1657,32 +1677,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--perf-factor",
         type=float,
-        default=1.1,
+        default=1.0,
         help=(
-            "Max allowed Z3-solve-time slowdown factor vs each function's pre-strip "
-            "baseline (default 1.1 = 10 percent), measured from verus `--time`'s "
-            "`total smt-run: N ms` (pure Z3, no rebuild / front-end floor) so cold vs "
-            "warm rebuilds don't pollute it. A strip that passes but exceeds "
-            "perf_factor*baseline + --perf-slack is reverted (kept as Z3 guidance) "
-            "so stripping can't slow verification. `--time` is auto-appended to the "
-            "verify command. Use --no-perf-guard to disable."
-        ),
-    )
-    parser.add_argument(
-        "--perf-slack",
-        type=float,
-        default=0.5,
-        help=(
-            "Absolute slack (seconds) added to perf_factor*baseline Z3 time, "
-            "protecting fast functions from Z3 run-to-run jitter false-reverts. "
-            "Default 0.5s; raise it (e.g. 2s) if Z3 jitter over-keeps, lower (e.g. "
-            "0.2s) to be stricter."
+            "Max allowed Z3 resource slowdown factor vs each function's pre-strip "
+            "baseline (default 1.0 = 0 percent), measured from verus `--time`'s "
+            "`total smt-run: N ms, R rlimit` (Z3's deterministic rlimit count, "
+            "machine-independent, no rebuild / front-end floor) so cold vs warm "
+            "rebuilds and machine load don't pollute it. A strip that passes but "
+            "strictly exceeds perf_factor*baseline is reverted (kept as Z3 "
+            "guidance) so stripping can't slow verification; rlimit is "
+            "deterministic, so no jitter margin is needed. `--time` is "
+            "auto-appended to the verify command. Use --no-perf-guard to disable."
         ),
     )
     parser.add_argument(
         "--no-perf-guard",
         action="store_true",
-        help="Disable the --perf-factor time guard (strip purely on pass/fail).",
+        help="Disable the --perf-factor rlimit guard (strip purely on pass/fail).",
     )
     parser.add_argument(
         "--modified-only",
@@ -1730,7 +1741,6 @@ def main() -> int:
         modified_hunks(repo_root, args.base) if args.modified_only else None
     )
     perf_factor = None if args.no_perf_guard else args.perf_factor
-    perf_slack = args.perf_slack
     total = SimplifyStats()
     progress = StripProgress()
     try:
@@ -1744,7 +1754,6 @@ def main() -> int:
                     dry_run=args.dry_run,
                     deep_clean=args.deep_clean,
                     perf_factor=perf_factor,
-                    perf_slack=perf_slack,
                     functions=function_names,
                     modified_hunks_map=modified_hunks_map,
                     progress=progress,
