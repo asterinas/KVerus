@@ -44,7 +44,7 @@ For routine redundant proof-statement cleanup, prefer the bundled script before 
   --format-command '<format command>'
 ```
 
-The script scans changed `.rs` files when no `--target-dir` or `--file` is provided. It simplifies at function scope, matches the `src/refiner/simplifier.py` policy, skips runtime `assert!(...)`, never removes `assert(false)`, skips functions containing `admit`, `assume`, or `#[verifier::external_body]` unless `--deep-clean` is set, removes one proof statement at a time, and keeps the removal only when verification still succeeds and the solver's resource use does not regress, so stripping can't slow verification. Pass `--no-perf-guard` to decide purely on pass/fail. With `tree-sitter-verus`, candidates include standalone function-call statements in `proof fn`, `proof {}`, and assertion proof blocks; executable calls are extracted but never offered for deletion. The default mode requires `tree-sitter-verus` and errors out if it is missing; pass `--text-only` to force the lower-precision text-based (asserts-only) parser. Use `--dry-run` to list candidates without editing.
+The script scans changed `.rs` files when no `--target-dir` or `--file` is provided. It simplifies at function scope, matches the `src/refiner/simplifier.py` policy, skips runtime `assert!(...)`, never removes `assert(false)`, skips functions containing `admit`, `assume`, or `#[verifier::external_body]` unless `--deep-clean` is set, removes one proof statement at a time, and keeps the removal only when verification still succeeds. The rlimit perf guard (revert a passing strip when the Z3 rlimit grew by more than `--perf-factor`, measured via verus `--time`) applies only to functions carrying an explicit `#[verifier::rlimit(...)]` budget — those have a real cap a strip could push toward. Every other function strips purely on pass/fail: rlimit growth is not checked and no baseline probe verify is spent. Pass `--no-perf-guard` to apply that pass/fail-only behavior everywhere. With `tree-sitter-verus`, candidates include standalone function-call statements in `proof fn`, `proof {}`, and assertion proof blocks; executable calls are extracted but never offered for deletion. `tree-sitter-verus` is required and the script errors out if it is missing. Use `--dry-run` to list candidates without editing.
 
 To simplify a single function (or a few) instead of a whole file or directory, point `--target-dir` at the file and pass `--function` (repeatable, or comma-separated). Only functions whose short name matches are processed; every other function in the file is left untouched:
 
@@ -67,9 +67,8 @@ To restrict stripping to only the functions you actually changed in this diff, p
 script checks it). Run the script with that venv's Python
 (`$KVERUS_PYTHON`, set up by sourcing `$AGENT_DIR/kverus.env`) and full
 proof-call simplification is active automatically — no manual availability check is
-needed. If the venv is ever unavailable, the default mode errors out — pass
-`--text-only` to force text-based (asserts-only) parsing; always run the script
-rather than substituting manual
+needed. If the venv is ever unavailable, the script errors out; fix the venv rather
+than substituting manual
 stripping, since only the script performs the delete→verify→restore safety loop per
 candidate.
 

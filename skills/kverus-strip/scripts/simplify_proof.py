@@ -1023,7 +1023,11 @@ def candidate_ranges_from_code(
     source_text: str,
     range_start: int,
     deep_clean: bool,
-) -> tuple[list[CandidateRange], bool]:
+) -> tuple[list[CandidateRange], bool, bool]:
+    """Return this function's strippable candidates plus two flags:
+    (candidates, skipped_unproven, rlimit_budgeted). rlimit_budgeted means the
+    function carries a `#[verifier::rlimit(...)]` budget, i.e. the perf guard's
+    rlimit check applies to it."""
     parser = simplify_parser_from_code(code)
     has_external_body = any(
         "verifier::external_body"
@@ -1034,8 +1038,9 @@ def candidate_ranges_from_code(
         )
         for item in parser.attributes
     )
+    rlimit_budgeted = has_rlimit_marker(parser.attributes)
     if not deep_clean and (parser.admits or parser.assumes or has_external_body):
-        return [], True
+        return [], True, rlimit_budgeted
 
     code_bytes = code.encode("utf-8")
     candidates: list[CandidateRange] = []
@@ -1080,7 +1085,7 @@ def candidate_ranges_from_code(
     # every original byte range valid while simplify_file incrementally blanks
     # candidates from the same function.
     candidates.sort(key=lambda item: (item.end - item.start, item.start))
-    return candidates, False
+    return candidates, False, rlimit_budgeted
 
 
 def run_shell(
@@ -1204,6 +1209,25 @@ def _parse_smt_run_stats(output: str) -> tuple[float | None, int | None]:
     ms = float(match.group(1))
     rlimit = int(match.group(2)) if match.group(2) is not None else None
     return ms, rlimit
+
+
+# An explicit per-function solver budget, e.g. `#[verifier::rlimit(50)]`. The
+# rlimit part of the perf guard is scoped to functions carrying this marker:
+# only they have a real cap a strip could push toward or past. Functions
+# without a marker verify under the default budget, so their strips are
+# decided purely on pass/fail and no baseline rlimit probe is spent on them.
+# Matched against the inner text of tree-sitter `attribute` nodes (the node
+# spans `verifier::rlimit(50)` without the `#[...]` wrapper), so mentions
+# inside comments or strings cannot trigger it the way raw regex on the source
+# would.
+_RLIMIT_MARKER_RE = re.compile(r"verifier\s*::\s*rlimit\s*\(")
+
+
+def has_rlimit_marker(attributes: list) -> bool:
+    """Whether the parsed attribute list contains a `#[verifier::rlimit(...)]`."""
+    return any(
+        _RLIMIT_MARKER_RE.search(str(item.get("attribute", ""))) for item in attributes
+    )
 
 
 # Matches verus's --verify-function rejection emitted on failure when the supplied
@@ -1350,7 +1374,7 @@ def count_file_candidates(
     count = 0
     for function_range in plan.ranges:
         code = current_bytes[function_range.start : function_range.end].decode("utf-8")
-        candidates, skipped_unproven = candidate_ranges_from_code(
+        candidates, skipped_unproven, _rlimit_budgeted = candidate_ranges_from_code(
             code, text, function_range.start, deep_clean
         )
         if skipped_unproven:
@@ -1396,7 +1420,7 @@ def simplify_file(
     for function_range in ranges:
         stats.functions_processed += 1
         code = current_bytes[function_range.start : function_range.end].decode("utf-8")
-        candidates, skipped_unproven = candidate_ranges_from_code(
+        candidates, skipped_unproven, rlimit_budgeted = candidate_ranges_from_code(
             code,
             text,
             function_range.start,
@@ -1512,7 +1536,21 @@ def simplify_file(
         # right after a successful run is a cached no-op that prints no stats and
         # would silently disable the guard. Trailing newlines don't change the
         # encoding, so the measured rlimit is the true baseline.
-        if perf_factor is not None:
+        # The rlimit guard only applies to functions with an explicit
+        # `#[verifier::rlimit(...)]` budget: only they have a real cap a strip
+        # could push toward, so a passing strip that raises their raw rlimit is
+        # reverted to preserve the author-sized budget. Functions without the
+        # marker verify under the default budget, where a passing strip is fine
+        # regardless of the rlimit delta -- for them the guard (and its baseline
+        # probe verify run) is skipped entirely and passing strips are kept.
+        if perf_factor is not None and not rlimit_budgeted:
+            _rlimit_base = None
+            logger.info(
+                f"no #[verifier::rlimit(...)] marker on "
+                f"{display_path}::{fn_name or 'fn'}; perf guard off, "
+                f"stripping decided on pass/fail only"
+            )
+        elif perf_factor is not None:
             baseline_probes += 1
             _base_ok, _base_out = verify_candidate_bytes(
                 current_bytes + b"\n" * baseline_probes
@@ -1747,17 +1785,24 @@ def parse_args() -> argparse.Namespace:
             "baseline (default 1.0 = 0 percent), measured from verus `--time`'s "
             "`total smt-run: N ms, R rlimit` (Z3's deterministic rlimit count, "
             "machine-independent, no rebuild / front-end floor) so cold vs warm "
-            "rebuilds and machine load don't pollute it. A strip that passes but "
-            "strictly exceeds perf_factor*baseline is reverted (kept as Z3 "
-            "guidance) so stripping can't slow verification; rlimit is "
-            "deterministic, so no jitter margin is needed. `--time` is "
+            "rebuilds and machine load don't pollute it. Only applies to functions "
+            "with an explicit `#[verifier::rlimit(...)]` budget: those have a real "
+            "cap a strip could push toward, so a passing strip that strictly "
+            "exceeds perf_factor*baseline is reverted (kept as Z3 guidance) to "
+            "preserve the author-sized budget. Functions without the marker strip "
+            "purely on pass/fail -- no rlimit check, and no baseline probe verify. "
+            "rlimit is deterministic, so no jitter margin is needed. `--time` is "
             "auto-appended to the verify command. Use --no-perf-guard to disable."
         ),
     )
     parser.add_argument(
         "--no-perf-guard",
         action="store_true",
-        help="Disable the --perf-factor rlimit guard (strip purely on pass/fail).",
+        help=(
+            "Disable the --perf-factor rlimit guard (strip purely on pass/fail, "
+            "i.e. treat every function as if it had no #[verifier::rlimit(...)] "
+            "marker)."
+        ),
     )
     parser.add_argument(
         "--modified-only",
