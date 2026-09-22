@@ -296,11 +296,45 @@ if condition {
 Do not rewrite executable control flow. This pattern applies only in proof/spec/
 ghost contexts covered by the hard constraints.
 
-**Caution:** A textually empty proof branch can still add its condition or negation
-to the SMT context. Treat removal as a normal proof-code candidate: delete it,
-verify, and restore the minimal branch if verification fails or a recommendation
-is unmet. When only one branch is empty, rewrite the proof-only condition only if
-needed to remove that branch, and verify the equivalent form immediately.
+**Caution:** A textually empty proof branch is usually *not* dead code — it is the
+carrier of a case split. When Pattern 1 strips the only statement inside a branch, the
+branch condition typically still serves two roles:
+
+1. **Trivial case:** under the condition, the enclosing goal (often an `ensures`
+   existential) is witnessed by a concrete value, so the branch needs no proof code.
+2. **Sibling path fact:** the condition's negation is exactly the fact the *other*
+   branch needs — e.g. unfolding `!u64_bit_is_set(word, 0)` to
+   `(word & (1u64 << 0)) == 0`, a conjunct of a `by (bit_vector) requires` clause. The
+   explicit `assert` Pattern 1 removed relied on this path fact.
+
+Treat plain removal as a normal proof-code candidate: delete it, verify, and restore the
+minimal branch if verification fails or a recommendation is unmet.
+
+**Preferred treatment — guard flip.** Instead of deleting the case split or restoring a
+redundant witness `assert`, negate the guard of the *meaty* branch so the trivial case
+becomes the unhandled fall-through with no branch at all:
+
+```rust
+// before: middle branch emptied by Pattern 1 — the case split still stands:
+} else if u64_bit_is_set(word, 0) {
+} else {
+    // recursion; uses !u64_bit_is_set(word, 0) as a path fact
+}
+
+// after: trivial case (ensures witnessed by b == 0) falls through:
+} else if !u64_bit_is_set(word, 0) {
+    // Bit 0 clear: recurse on the shift. Otherwise (bit 0 set, 0 < n) the ensures
+    // is witnessed by `b == 0` directly.
+    ...
+}
+```
+
+The vacuous fall-through still closes: the negated branch condition is a ground term that
+matches the goal's `#[trigger]`, so the SMT finds the witness via model-based quantifier
+instantiation. Keep a one-line comment on the flipped guard noting why the unhandled case
+is trivial, verify the flipped form immediately, and only fall back — first to an explicit
+witness `assert` in the removed branch, then to restoring the branch — if verification
+fails.
 
 ### Pattern 6: Unused proof-variable initializations
 
