@@ -456,15 +456,61 @@ def _log_sink(message: str) -> None:
     tqdm_class.write(message.rstrip("\n") + "\n", end="")
 
 
-# Route loguru output through tqdm.write so per-step logs appear above the
-# progress bar instead of corrupting it.
-logger.remove()
-logger.add(
-    _log_sink,
-    level="INFO",
-    format="<green>{time:HH:mm:ss}</green> <level>{level: <7}</level> {message}",
-    colorize=sys.stderr.isatty(),
+_LOG_FORMAT = "<green>{time:HH:mm:ss}</green> <level>{level: <7}</level> {message}"
+
+# Per-candidate outcome stream: bare `{message}` rows whose ✓/✗/~ prefix makes
+# `removed` vs `kept` (and why it was kept) readable at a glance. ANSI colors
+# below are empty when stderr is piped, so redirected logs stay plain and the
+# symbols alone carry the distinction.
+_OUTCOME_FORMAT = "{message}"
+_ANSI_OK, _ANSI_KEPT, _ANSI_RESET = (
+    ("\x1b[32m", "\x1b[33m", "\x1b[0m") if sys.stderr.isatty() else ("", "", "")
 )
+
+
+def _clip(text: str, width: int = 88) -> str:
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def _outcome_line(
+    color: str,
+    symbol: str,
+    result: str,
+    loc: str,
+    preview: str,
+    reason: str | None = None,
+) -> str:
+    line = f"{color}{symbol} {result:<7}  {loc}  {preview}"
+    if reason:
+        line += f"   ({reason})"
+    return f"{line}{_ANSI_RESET}"
+
+
+def set_log_level(level: str) -> None:
+    """Reinstall the tqdm-routed loguru sinks: the timestamped INFO sink for
+    discovery/warnings/summaries, plus -- unless ``level`` is INFO (``--quiet``)
+    -- the bare per-candidate DEBUG outcome stream."""
+    logger.remove()
+    logger.add(
+        _log_sink,
+        level="INFO",
+        format=_LOG_FORMAT,
+        colorize=sys.stderr.isatty(),
+    )
+    if level != "INFO":
+        logger.add(
+            _log_sink,
+            level="DEBUG",
+            filter=lambda record: record["level"].name == "DEBUG",
+            format=_OUTCOME_FORMAT,
+            colorize=False,
+        )
+
+
+# Route loguru output through tqdm.write so per-step logs appear above the
+# progress bar instead of corrupting it. Bootstraps at INFO for import-time
+# errors; main() re-runs this at DEBUG unless --quiet was passed.
+set_log_level("INFO")
 
 
 @dataclass(frozen=True)
@@ -1252,15 +1298,37 @@ class StripProgress:
         self._bar = tqdm_class(
             total=total, desc=desc, unit=unit, dynamic_ncols=True, leave=True
         )
+        self._removed = 0
+        self._kept = 0
+        self._current: str | None = None
 
     def advance(self, n: int = 1) -> None:
         self._bar.update(n)
+
+    def record(self, removed: bool) -> None:
+        """Fold one decision into the live ✓/✗ tally on the bar postfix."""
+        if removed:
+            self._removed += 1
+        else:
+            self._kept += 1
+        self._refresh_postfix()
+
+    def set_current(self, what: str) -> None:
+        """Show the candidate currently being verified on the bar postfix."""
+        self._current = _clip(what, 48)
+        self._refresh_postfix()
 
     def set_description(self, desc: str) -> None:
         self._bar.set_description(desc)
 
     def close(self) -> None:
         self._bar.close()
+
+    def _refresh_postfix(self) -> None:
+        parts = [f"✓{self._removed}", f"✗{self._kept}"]
+        if self._current:
+            parts.append(self._current)
+        self._bar.set_postfix_str(" | ".join(parts))
 
 
 @dataclass(frozen=True)
@@ -1404,6 +1472,8 @@ def simplify_file(
         return stats
 
     ranges = compute_function_ranges(path, text, functions, modified_hunks_map).ranges
+    base_name = display_path.rsplit("/", 1)[-1]
+    logger.info(f"stripping {display_path}: {len(ranges)} function(s)")
     current_bytes = text.encode("utf-8")
     # The perf guard measures verus's Z3 rlimit count (`total smt-run: N ms, R rlimit`,
     # printed by --time), not wall time -- so cold vs warm rebuilds and machine load
@@ -1469,6 +1539,7 @@ def simplify_file(
                 stats.restored += 1
             if progress is not None:
                 progress.advance(1)
+                progress.record(removed)
 
         if dry_run:
             for item in candidates:
@@ -1580,9 +1651,9 @@ def simplify_file(
             _rlimit_base = None
 
         for item in candidates:
-            logger.info(
-                f"trying {item.kind} {display_path}:{item.line}: {item.preview}"
-            )
+            item_loc = f"{base_name}:{item.line}"
+            if progress is not None:
+                progress.set_current(f"{item_loc} {_clip(item.preview, 36)}")
             candidate_bytes = blank_items(current_bytes, [item])
             ok, _out = verify_candidate_bytes(candidate_bytes)
             _, _rlimit_after = _parse_smt_run_stats(_out)
@@ -1596,22 +1667,37 @@ def simplify_file(
             if ok and not perf_held:
                 current_bytes = candidate_bytes
                 record_attempt(item, removed=True)
-                logger.info(
-                    f"removed redundant {item.kind} at {display_path}:{item.line}"
+                logger.debug(
+                    _outcome_line(
+                        _ANSI_OK, "✓", "removed", item_loc, _clip(item.preview)
+                    )
                 )
             else:
                 path.write_bytes(current_bytes)
                 record_attempt(item, removed=False)
                 if perf_held:
                     stats.kept_as_perf_hint += 1
-                    logger.info(
-                        f"kept {item.kind} at {display_path}:{item.line} as perf hint "
-                        f"(rlimit {_rlimit_after} > {perf_factor:g}x baseline "
-                        f"{_rlimit_base})"
+                    logger.debug(
+                        _outcome_line(
+                            _ANSI_KEPT,
+                            "~",
+                            "kept",
+                            item_loc,
+                            _clip(item.preview),
+                            f"rlimit exceeded: {_rlimit_after:.0f} > "
+                            f"{perf_factor:g}x baseline {_rlimit_base}",
+                        )
                     )
                 else:
-                    logger.info(
-                        f"kept required {item.kind} at {display_path}:{item.line}"
+                    logger.debug(
+                        _outcome_line(
+                            _ANSI_KEPT,
+                            "✗",
+                            "kept",
+                            item_loc,
+                            _clip(item.preview),
+                            "verify failed",
+                        )
                     )
     return stats
 
@@ -1815,11 +1901,21 @@ def parse_args() -> argparse.Namespace:
             "proof code."
         ),
     )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help=(
+            "Hide the per-candidate debug lines (trying/removed/kept for each "
+            "assert and proof call). Shown by default; only per-file discovery, "
+            "warnings, and the final summary remain."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    set_log_level("INFO" if args.quiet else "DEBUG")
     repo_root = Path(args.repo_root).resolve() if args.repo_root else git_root()
 
     verify_command = args.verify_command

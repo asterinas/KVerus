@@ -2,6 +2,7 @@ cff-version: 1.2.0
 message: "If you use KVerus in your research, please cite the following paper."
 
 title: "KVerus"
+doi: 10.1145/3832783.3834503
 
 authors:
   - given-names: "Yuwei"
@@ -18,7 +19,7 @@ authors:
     family-names: "Wei"
 
 preferred-citation:
-  type: article
+  type: conference-paper
 
   title: "KVerus: Scalable and Resilient Formal Verification Proof Generation for Rust Code"
 
@@ -36,6 +37,12 @@ preferred-citation:
     - given-names: "Tao"
       family-names: "Wei"
 
+  conference:
+    name: "41st IEEE/ACM International Conference on Automated Software Engineering"
+  collection-title: "Proceedings of the 41st IEEE/ACM International Conference on Automated Software Engineering"
+  publisher:
+    name: "Association for Computing Machinery"
   year: 2026
-
-  journal: "arXiv preprint arXiv:2605.03822"
+  start: 4139
+  end: 4151
+  doi: 10.1145/3832783.3834503

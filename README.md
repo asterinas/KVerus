@@ -97,10 +97,20 @@ This showcase uses `tree-sitter-verus` for full proof-call discovery. Before sta
 ## Cite
 If you find KVerus useful in your research, please consider citing our ASE 2026 paper:
 ```
-@article{liu2026kverus,
-  title={KVerus: Scalable and Resilient Formal Verification Proof Generation for Rust Code},
-  author={Liu, Yuwei and Wan, Xinyi and Wang, Yanhao and Wang, Minghua and Huang, Lin and Wei, Tao},
-  journal={arXiv preprint arXiv:2605.03822},
-  year={2026}
+@inproceedings{10.1145/3832783.3834503,
+  author = {Liu, Yuwei and Wan, Xinyi and Wang, Yanhao and Wang, Minghua and Huang, Lin and Wei, Tao},
+  title = {KVerus: Scalable and Resilient Formal Verification Proof Generation for Rust Code},
+  year = {2026},
+  isbn = {9798400728822},
+  publisher = {Association for Computing Machinery},
+  address = {New York, NY, USA},
+  url = {https://doi.org/10.1145/3832783.3834503},
+  doi = {10.1145/3832783.3834503},
+  booktitle = {Proceedings of the 41st IEEE/ACM International Conference on Automated Software Engineering},
+  pages = {4139–4151},
+  numpages = {13},
+  keywords = {Formal Verification, Large Language Models, Proof Generation, Rust, Verus},
+  location = {Munich, Germany},
+  series = {ASE '26}
 }
 ```

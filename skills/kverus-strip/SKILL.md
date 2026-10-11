@@ -44,7 +44,7 @@ For routine redundant proof-statement cleanup, prefer the bundled script before 
   --format-command '<format command>'
 ```
 
-The script scans changed `.rs` files when no `--target-dir` or `--file` is provided. It simplifies at function scope, matches the `src/refiner/simplifier.py` policy, skips runtime `assert!(...)`, never removes `assert(false)`, skips functions containing `admit`, `assume`, or `#[verifier::external_body]` unless `--deep-clean` is set, removes one proof statement at a time, and keeps the removal only when verification still succeeds. The rlimit perf guard (revert a passing strip when the Z3 rlimit grew by more than `--perf-factor`, measured via verus `--time`) applies only to functions carrying an explicit `#[verifier::rlimit(...)]` budget — those have a real cap a strip could push toward. Every other function strips purely on pass/fail: rlimit growth is not checked and no baseline probe verify is spent. Pass `--no-perf-guard` to apply that pass/fail-only behavior everywhere. With `tree-sitter-verus`, candidates include standalone function-call statements in `proof fn`, `proof {}`, and assertion proof blocks; executable calls are extracted but never offered for deletion. `tree-sitter-verus` is required and the script errors out if it is missing. Use `--dry-run` to list candidates without editing.
+The script scans changed `.rs` files when no `--target-dir` or `--file` is provided. It simplifies at function scope, matches the `src/refiner/simplifier.py` policy, skips runtime `assert!(...)`, never removes `assert(false)`, skips functions containing `admit`, `assume`, or `#[verifier::external_body]` unless `--deep-clean` is set, removes one proof statement at a time, and keeps the removal only when verification still succeeds. The rlimit perf guard (revert a passing strip when the Z3 rlimit grew by more than `--perf-factor`, measured via verus `--time`) applies only to functions carrying an explicit `#[verifier::rlimit(...)]` budget — those have a real cap a strip could push toward. Every other function strips purely on pass/fail: rlimit growth is not checked and no baseline probe verify is spent. Pass `--no-perf-guard` to apply that pass/fail-only behavior everywhere. With `tree-sitter-verus`, candidates include standalone function-call statements in `proof fn`, `proof {}`, and assertion proof blocks; executable calls are extracted but never offered for deletion. `tree-sitter-verus` is required and the script errors out if it is missing. Use `--dry-run` to list candidates without editing. Each candidate prints one bare outcome line — `✓ removed mod.rs:218 assert(fid != id);`, `✗ kept … (verify failed)`, `~ kept … (rlimit exceeded: N > Kx baseline M)` — (DEBUG-level sink, shown by default; `--quiet` hides them; colored on a tty, symbols only when piped). The tqdm bar postfix carries the live `✓N ✗N` tally plus the candidate currently being verified, so there is no separate `trying` line. Each file first logs `stripping <path>: N function(s)` so the short filename in outcome lines stays unambiguous; `kept …` lines end with the bare reason and no more detail than that.
 
 To simplify a single function (or a few) instead of a whole file or directory, point `--target-dir` at the file and pass `--function` (repeatable, or comma-separated). Only functions whose short name matches are processed; every other function in the file is left untouched:
 
@@ -82,6 +82,60 @@ automatically restart it with a larger budget.
 
 After successful removals, pass `--format-command` to run the project formatter and clean up formatter-introduced added empty lines. Omit it only when the caller will run an equivalent formatter and cleanup step.
 
+## Whole-Run Rlimit Guard
+
+The script's `--perf-factor` guard only protects functions carrying an explicit
+`#[verifier::rlimit(...)]` budget. The protocol below guards the whole run with two
+total-rlimit measurements — one taken before any proof code is touched, one after the
+ENTIRE simplification is finished (script done **plus** the agent's postprocess: orphaned
+comment/binding/empty-branch cleanup, trusted-axiom-call review, formatter, and the final
+full verification). One measurement pair wraps the whole session, not one per file.
+
+Both measurements use the project's FULL verification command with verus `--time`
+appended (e.g. `cargo dv verify --targets ostd -- --time`), and must use the identical
+command and scope so the numbers compare directly.
+
+- A real run prints one aggregate line at the end:
+
+  ```text
+  total smt-run:             233340 ms, 1127340657 rlimit (11 threads)
+  ```
+
+  Record the rlimit count. The ms figure is machine-load noise; the rlimit is Z3's
+  deterministic resource count (machine-independent), so pre vs post compares exactly,
+  with no jitter tolerance.
+- A run whose content is unchanged since the last successful verify replays a cached
+  no-op — it finishes in ~1–2 seconds and prints NO stats line, so it is silently *not*
+  a measurement. Force a real run: append a trailing newline to a file in the strip
+  scope, verify, remove the newline again. Trailing whitespace changes nothing verus
+  encodes, so the measured rlimit is the true baseline of the clean content. (Skip both
+  measurements when the strip produced no changes.)
+- Before the first deletion, snapshot the pre-strip content of the file(s) being
+  stripped (e.g. copy them aside). If the worktree was already dirty, a plain
+  `git diff` cannot reconstruct the pre-strip text for restores.
+- If `post <= pre`: report both numbers and stop — a decrease is the normal outcome
+  (a good strip removes solver work; e.g. the list_store strip landed at −179,176 on a
+  1,127,340,657 baseline).
+
+If `post > pre` — bring the rlimit as close to the original as possible, first by
+restoring proof code, then by reporting:
+
+1. Report the growth: both numbers, the delta, and the percentage.
+2. Restore stripped proof guidance toward the baseline, most recent deletion first
+   (the last deletions are both the likeliest blame and the cheapest to undo):
+   re-insert the deleted lines from the snapshot, re-run the full `--time` verify, and
+   keep restoring while `post > pre`. Every intermediate state was verified clean during
+   the strip, so each single restore is safe. Bound the loop (≈10 full-verify rounds) —
+   full verifies are minutes each. For attribution, bisect with scoped measurements
+   (`-- --verify-only-module <mod> --time`, then `--verify-function <fn> --time`) to
+   find which function grew before restoring anything.
+3. Whatever growth remains after the bounded restores, report it plainly with the
+   follow-up levers (error-span-guided re-add via `--profile`, relaxing the strip for
+   that function), and leave the tree verified-green.
+
+Comment-only deletions are rlimit-neutral (whole-crate totals have tested
+byte-identical), so they never need this recovery loop.
+
 ## Objective
 
 Remove all proof code that is not strictly necessary for verification to pass. Prefer maximal removal over conservative trimming. The SMT solver often does not need explicit proof hints that a human would.
@@ -96,11 +150,16 @@ Remove all proof code that is not strictly necessary for verification to pass. P
 
 ## Required Workflow
 
-### Step 0: Collect Target Files
+### Step 0: Record the rlimit baseline
+
+Take the whole-run rlimit measurement and pre-strip snapshot BEFORE the simplification
+script (or the first manual deletion) runs — see [Whole-Run Rlimit Guard](#whole-run-rlimit-guard).
+
+### Step 1: Collect Target Files
 
 List all `.rs` files in the `target-dirs` directories (including subdirectories).
 
-### Step 1: Per-File Aggressive Deletion
+### Step 2: Per-File Aggressive Deletion
 
 For each `.rs` file, work through the deletion patterns in priority order (Pattern 1 first, as it is the most impactful):
 
@@ -121,12 +180,15 @@ For each `.rs` file, work through the deletion patterns in priority order (Patte
 5. If the targeted module passes, move to the next file.
 6. If the targeted module fails, read the error output and restore the minimal set of deletions needed, then re-verify.
 
-### Step 2: Cross-Module Verification
+### Step 3: Cross-Module Verification
 
 After all individual modules pass:
 
 1. Run the full `<verify>` command.
 2. Fix any cross-module regressions by restoring necessary proof code.
+3. When the ENTIRE simplification is done (script + postprocess + formatter) and the
+   tree is verified green, take the closing whole-run rlimit measurement and resolve any
+   growth per [Whole-Run Rlimit Guard](#whole-run-rlimit-guard).
 
 ## Failure Recovery
 
@@ -386,3 +448,4 @@ After completion, report:
 - Number of deletions made (total lines removed)
 - Number of deletions that had to be restored
 - Final verification result (pass/fail)
+- Whole-run rlimit, pre vs post (and the delta; plus any guard restores if the total grew)
