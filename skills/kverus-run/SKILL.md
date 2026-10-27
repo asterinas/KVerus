@@ -328,3 +328,5 @@ After the pipeline completes (or aborts):
 - Phase 7 (Postprocess) runs only after the whole pipeline is allowed to proceed past quality gates.
 - The pipeline never silently drops a file; all files appear in the final report.
 - If the verification command itself fails to execute (not verification errors, but command-not-found or crash), stop the pipeline and report the issue.
+
+- **Hoplogic**: this skill's machine-executable form is the HopSpec in `spec.md`; `source.md` is a verbatim copy of the original SKILL.md text, and `kverus-run-knowledge.md` carries the translation rulings, deviations, and deployment prerequisites.

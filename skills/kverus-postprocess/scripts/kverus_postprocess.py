@@ -19,6 +19,67 @@ from pathlib import Path
 from typing import Iterable
 
 
+def _bootstrap_kverus_env() -> None:
+    """Load kverus.env (written by install-skills.sh) without shell sourcing
+    and re-exec this script under KVERUS_PYTHON when the current interpreter
+    is not it. The search walks up from this file without resolving symlinks
+    so symlinked skill installs find the target project's env file. Idempotent:
+    safe to call again when the caller already sourced kverus.env."""
+    import os
+    import re
+    import sys
+    from pathlib import Path
+
+    if os.environ.get("KVERUS_ENV_BOOTSTRAPPED") == "1":
+        return
+    here = Path(os.path.abspath(__file__)).parent
+    env_path = os.environ.get("KVERUS_ENV_FILE")
+    if not env_path:
+        for ancestor in [here, *here.parents][:5]:
+            candidate = ancestor / "kverus.env"
+            if candidate.is_file():
+                env_path = str(candidate)
+                break
+    if env_path:
+        values = {}
+        for raw in Path(env_path).read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line.removeprefix("export ").lstrip()
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                values[key] = value
+        var_ref = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+        for key in list(values):
+            for _ in range(3):
+                expanded = var_ref.sub(
+                    lambda m: values.get(m.group(1), m.group(0)), values[key]
+                )
+                if expanded == values[key]:
+                    break
+                values[key] = expanded
+        os.environ.update(values)
+    python = os.environ.get("KVERUS_PYTHON")
+    if python and python != sys.executable and Path(python).is_file():
+        os.environ["KVERUS_ENV_BOOTSTRAPPED"] = "1"
+        try:
+            os.execv(python, [python, *sys.argv])
+        except OSError as exc:
+            print(
+                f"warning: re-exec under KVERUS_PYTHON failed: {exc}", file=sys.stderr
+            )
+    os.environ["KVERUS_ENV_BOOTSTRAPPED"] = "1"
+
+
+_bootstrap_kverus_env()
+
+
 SKILL_DIR = Path(__file__).resolve().parents[1]
 CACHE_DIR = SKILL_DIR / ".cache"
 DEFAULT_RULE_REPO = os.environ.get("KVERUS_POSTPROCESS_RULE_REPO", "")
@@ -282,9 +343,13 @@ def collect_dynamic_rules(
     rules: list[dict] = []
     commits: list[dict] = []
     if isinstance(review_comments, list):
-        rules.extend(extract_rules_from_comments(rule_repo, None, "review", review_comments))
+        rules.extend(
+            extract_rules_from_comments(rule_repo, None, "review", review_comments)
+        )
     if isinstance(issue_comments, list):
-        rules.extend(extract_rules_from_comments(rule_repo, None, "issue", issue_comments))
+        rules.extend(
+            extract_rules_from_comments(rule_repo, None, "issue", issue_comments)
+        )
     if isinstance(recent_commits, list):
         for commit in recent_commits:
             message = commit.get("commit", {}).get("message", "")
@@ -293,7 +358,9 @@ def collect_dynamic_rules(
                     {
                         "sha": commit.get("sha", "")[:12],
                         "summary": message.splitlines()[0],
-                        "source": commit.get("html_url", f"https://github.com/{rule_repo}/commits"),
+                        "source": commit.get(
+                            "html_url", f"https://github.com/{rule_repo}/commits"
+                        ),
                     }
                 )
 
@@ -366,7 +433,9 @@ def load_cached_rules(rule_repo: str) -> dict | None:
 
 def refresh_or_load_rules(args: argparse.Namespace, findings: list[Finding]) -> dict:
     if not args.rule_repo:
-        findings.append(Finding("INFO", "Dynamic rule refresh skipped; no rule repo configured."))
+        findings.append(
+            Finding("INFO", "Dynamic rule refresh skipped; no rule repo configured.")
+        )
         return {"rules": [], "commit_context": [], "generated_at": None}
 
     cached = load_cached_rules(args.rule_repo)
@@ -379,12 +448,19 @@ def refresh_or_load_rules(args: argparse.Namespace, findings: list[Finding]) -> 
                 )
             )
             return cached
-        findings.append(Finding("INFO", "Dynamic rule refresh skipped; no cache available."))
+        findings.append(
+            Finding("INFO", "Dynamic rule refresh skipped; no cache available.")
+        )
         return {"rules": [], "commit_context": [], "generated_at": None}
 
     ttl_seconds = max(0, int(args.rule_cache_ttl_hours * 3600))
     status = cache_status(cached, ttl_seconds)
-    if cached and status == "fresh" and not args.refresh_rules and not args.refresh_only:
+    if (
+        cached
+        and status == "fresh"
+        and not args.refresh_rules
+        and not args.refresh_only
+    ):
         findings.append(
             Finding(
                 "INFO",
@@ -408,7 +484,13 @@ def refresh_or_load_rules(args: argparse.Namespace, findings: list[Finding]) -> 
             )
         )
         return payload
-    except (urllib.error.URLError, TimeoutError, RuntimeError, OSError, json.JSONDecodeError) as err:
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        RuntimeError,
+        OSError,
+        json.JSONDecodeError,
+    ) as err:
         cached = load_cached_rules(args.rule_repo)
         if cached:
             findings.append(
@@ -566,20 +648,30 @@ def collect_local_findings(
     branch = run_git(["branch", "--show-current"], check=False).stdout.strip()
     files = changed_files(base)
     findings.append(Finding("INFO", f"Branch: {branch or '<detached>'}; base: {base}."))
-    findings.append(Finding("INFO", f"Changed files: {', '.join(files) if files else '<none>'}."))
+    findings.append(
+        Finding("INFO", f"Changed files: {', '.join(files) if files else '<none>'}.")
+    )
 
     for path in files:
         if path_starts_with_any(path, blocked_paths):
             findings.append(
-                Finding("ERROR", "Change is outside the configured verification scope.", path)
+                Finding(
+                    "ERROR",
+                    "Change is outside the configured verification scope.",
+                    path,
+                )
             )
         if path_starts_with_any(path, generated_paths):
-            findings.append(Finding("WARN", "Generated artifact appears in git status.", path))
+            findings.append(
+                Finding("WARN", "Generated artifact appears in git status.", path)
+            )
 
     status = run_git(["status", "--porcelain"], check=False).stdout
     for line in status.splitlines():
         if line.startswith("??"):
-            findings.append(Finding("WARN", "Untracked file or directory present.", line[3:]))
+            findings.append(
+                Finding("WARN", "Untracked file or directory present.", line[3:])
+            )
 
     diff = collect_diff_text(base, diff_paths)
     added = parse_added_lines(diff)
@@ -595,7 +687,9 @@ def collect_local_findings(
             if re.search(r"\bassume!\s*\(|\bassume\s*\(", text):
                 findings.append(Finding("ERROR", "New assume() found.", loc))
             if "#[verifier::external_body]" in text:
-                findings.append(Finding("ERROR", "New #[verifier::external_body] found.", loc))
+                findings.append(
+                    Finding("ERROR", "New #[verifier::external_body] found.", loc)
+                )
             if re.search(r"\b(?:pub\s+)?proof\s+fn\s+axiom_[A-Za-z0-9_]*", text):
                 findings.append(
                     Finding(
@@ -607,7 +701,11 @@ def collect_local_findings(
                 )
             if re.search(r"\b(?:pub\s+)?axiom\s+fn\b", text):
                 findings.append(
-                    Finding("WARN", "New axiom fn added; confirm this is an intended trusted boundary.", loc)
+                    Finding(
+                        "WARN",
+                        "New axiom fn added; confirm this is an intended trusted boundary.",
+                        loc,
+                    )
                 )
             if "#[allow(deprecated)]" in text:
                 findings.append(
@@ -619,7 +717,11 @@ def collect_local_findings(
                     )
                 )
             elif re.search(r"#\s*\[\s*allow\s*\(", text):
-                findings.append(Finding("WARN", "New #[allow(...)] needs narrow justification.", loc))
+                findings.append(
+                    Finding(
+                        "WARN", "New #[allow(...)] needs narrow justification.", loc
+                    )
+                )
             if stripped.startswith(("///", "//")) and re.search(
                 r"\b(proved by|by expanding|compute_only|nonlinear_arith|kverus can prove|verus can prove)\b",
                 stripped,
@@ -656,7 +758,9 @@ def collect_local_findings(
         line
         for line in added
         if is_rust_source_path(line.path)
-        and (line.text.lstrip().startswith("///") or line.text.lstrip().startswith("//"))
+        and (
+            line.text.lstrip().startswith("///") or line.text.lstrip().startswith("//")
+        )
     ]
     if len(added_doc_comments) >= 8:
         findings.append(
@@ -670,7 +774,9 @@ def collect_local_findings(
 
     for line in deleted_doc_comments:
         text = line.text.lower()
-        if re.search(r"verified|properties|property|gets|returns|ensures|requires", text):
+        if re.search(
+            r"verified|properties|property|gets|returns|ensures|requires", text
+        ):
             findings.append(
                 Finding(
                     "WARN",
@@ -712,10 +818,14 @@ def match_dynamic_rules(
         keywords = keywords_for_rule(summary)
         if not keywords:
             continue
-        relevant = bool(keywords) and any(keyword in all_added_text for keyword in keywords)
+        relevant = bool(keywords) and any(
+            keyword in all_added_text for keyword in keywords
+        )
         if isinstance(rule_path, str) and rule_path in changed_set:
             path_text = added_text_by_path.get(rule_path, "")
-            relevant = relevant or (bool(keywords) and any(keyword in path_text for keyword in keywords))
+            relevant = relevant or (
+                bool(keywords) and any(keyword in path_text for keyword in keywords)
+            )
         if relevant:
             findings.append(
                 Finding(
@@ -753,7 +863,9 @@ def keywords_for_rule(summary: str) -> list[str]:
 def print_rule_summary(payload: dict) -> None:
     print("INFO: Static seed rules:")
     for rule in STATIC_RULES:
-        print(f"INFO:   {rule['severity']} {rule['id']}: {rule['summary']} [{rule['source']}]")
+        print(
+            f"INFO:   {rule['severity']} {rule['id']}: {rule['summary']} [{rule['source']}]"
+        )
     dynamic = payload.get("rules", [])
     if dynamic:
         print(f"INFO: Dynamic review rules loaded: {len(dynamic)}")
@@ -768,10 +880,7 @@ def print_rule_summary(payload: dict) -> None:
     if commits:
         print(f"INFO: Recent commit subjects loaded: {len(commits)}")
         for commit in commits[:8]:
-            print(
-                "INFO:   "
-                f"{commit.get('sha')}: {commit.get('summary')}"
-            )
+            print("INFO:   " f"{commit.get('sha')}: {commit.get('summary')}")
         if len(commits) > 8:
             print(f"INFO:   ... {len(commits) - 8} more commit subjects")
 
@@ -815,7 +924,9 @@ def blocked_paths_from_args(args: argparse.Namespace) -> list[str]:
 
 
 def generated_paths_from_args(args: argparse.Namespace) -> list[str]:
-    return split_csv(args.generated_path) or env_csv("KVERUS_POSTPROCESS_GENERATED_PATHS")
+    return split_csv(args.generated_path) or env_csv(
+        "KVERUS_POSTPROCESS_GENERATED_PATHS"
+    )
 
 
 def path_starts_with_any(path: str, prefixes: list[str]) -> bool:
@@ -824,7 +935,9 @@ def path_starts_with_any(path: str, prefixes: list[str]) -> bool:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default="origin/main", help="Git base ref for changed-file context")
+    parser.add_argument(
+        "--base", default="origin/main", help="Git base ref for changed-file context"
+    )
     parser.add_argument(
         "--target-path",
         action="append",
@@ -853,7 +966,12 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Path prefix or comma-separated prefixes for generated artifacts.",
     )
-    parser.add_argument("--recent-prs", type=int, default=20, help="Number of recent comments to inspect")
+    parser.add_argument(
+        "--recent-prs",
+        type=int,
+        default=20,
+        help="Number of recent comments to inspect",
+    )
     parser.add_argument(
         "--github-timeout",
         type=int,
@@ -863,7 +981,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rule-cache-ttl-hours",
         type=float,
-        default=env_float("KVERUS_POSTPROCESS_RULE_CACHE_TTL_HOURS", DEFAULT_CACHE_TTL_HOURS),
+        default=env_float(
+            "KVERUS_POSTPROCESS_RULE_CACHE_TTL_HOURS", DEFAULT_CACHE_TTL_HOURS
+        ),
         help="Reuse successful rule refreshes for this many hours (default: 72)",
     )
     rule_action = parser.add_mutually_exclusive_group()
@@ -892,7 +1012,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also fetch recent commit subjects; disabled by default because they are informational only",
     )
-    parser.add_argument("--print-rules", action="store_true", help="Print loaded static and dynamic rules")
+    parser.add_argument(
+        "--print-rules",
+        action="store_true",
+        help="Print loaded static and dynamic rules",
+    )
     return parser.parse_args()
 
 
@@ -907,7 +1031,11 @@ def main() -> int:
             json.dumps(
                 {
                     "age_seconds": age,
-                    "cache_path": str(cache_file_for_rule_repo(args.rule_repo)) if args.rule_repo else None,
+                    "cache_path": (
+                        str(cache_file_for_rule_repo(args.rule_repo))
+                        if args.rule_repo
+                        else None
+                    ),
                     "repo": args.rule_repo or None,
                     "rule_count": len(cached.get("rules", [])) if cached else 0,
                     "status": status,
@@ -924,7 +1052,9 @@ def main() -> int:
         payload = refresh_or_load_rules(args, findings)
         for finding in findings:
             print_finding(finding)
-        failed = any("refresh failed" in finding.message.lower() for finding in findings)
+        failed = any(
+            "refresh failed" in finding.message.lower() for finding in findings
+        )
         print(
             "INFO: Refresh-only summary: "
             f"rules={len(payload.get('rules', []))}, "
@@ -957,7 +1087,13 @@ def main() -> int:
         )
 
     severity_order = {"ERROR": 0, "WARN": 1, "INFO": 2}
-    findings.sort(key=lambda item: (severity_order.get(item.severity, 9), item.location or "", item.message))
+    findings.sort(
+        key=lambda item: (
+            severity_order.get(item.severity, 9),
+            item.location or "",
+            item.message,
+        )
+    )
     for finding in findings:
         print_finding(finding)
 

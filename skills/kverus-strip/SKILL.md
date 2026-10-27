@@ -449,3 +449,5 @@ After completion, report:
 - Number of deletions that had to be restored
 - Final verification result (pass/fail)
 - Whole-run rlimit, pre vs post (and the delta; plus any guard restores if the total grew)
+
+- **Hoplogic**: this skill's machine-executable form is the HopSpec in `spec.md`; `source.md` is a verbatim copy of the original SKILL.md text, and `kverus-strip-knowledge.md` carries the translation rulings, deviations, and deployment prerequisites.

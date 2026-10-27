@@ -61,3 +61,5 @@ Return:
 5. Short rationale with concrete diff references.
 
 Keep output concise and review-focused.
+
+- **Hoplogic**: this skill's machine-executable form is the HopSpec in `spec.md`; `source.md` is a verbatim copy of the original SKILL.md text, and `kverus-eval-knowledge.md` carries the translation rulings, deviations, and deployment prerequisites.

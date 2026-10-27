@@ -157,3 +157,5 @@ The code is different.
 ```
 
 Do not mark a difference as safe only because Verus verifies it.
+
+- **Hoplogic**: this skill's machine-executable form is the HopSpec in `spec.md`; `source.md` is a verbatim copy of the original SKILL.md text, and `kverus-semantic-audit-knowledge.md` carries the translation rulings, deviations, and deployment prerequisites.

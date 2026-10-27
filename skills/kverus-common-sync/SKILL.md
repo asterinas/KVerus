@@ -54,3 +54,5 @@ When a check fails:
 2. Fix unresolvable cross-references: point them at the file they intend, using `references/...`, a sibling filename, or a Verus-root-relative guide path.
 3. For stale-source warnings, compare the cited guide source with the current reference and update only relevant summaries.
 4. Re-run the checker and `quick_validate.py` for `kverus-common`.
+
+- **Hoplogic**: this skill's machine-executable form is the HopSpec in `spec.md`; `source.md` is a verbatim copy of the original SKILL.md text, and `kverus-common-sync-knowledge.md` carries the translation rulings, deviations, and deployment prerequisites.

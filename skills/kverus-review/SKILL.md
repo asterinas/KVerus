@@ -298,3 +298,5 @@ _Or: No problematic warnings found._
 - Not a Rust-vs-Verus migration audit (use `kverus-semantic-audit`).
 
 This skill reviews **incremental changes** for regressions, not the full Rust-to-Verus migration.
+
+- **Hoplogic**: this skill's machine-executable form is the HopSpec in `spec.md`; `source.md` is a verbatim copy of the original SKILL.md text, and `kverus-review-knowledge.md` carries the translation rulings, deviations, and deployment prerequisites.

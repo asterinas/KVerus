@@ -122,3 +122,5 @@ Dynamic rules come from recent review and issue comments in the configured `--ru
 ## Report
 
 In the final response, report dynamic rule refresh/check result, verification command(s), assert simplification result, formatter result, and final `git diff --check`.
+
+- **Hoplogic**: this skill's machine-executable form is the HopSpec in `spec.md`; `source.md` is a verbatim copy of the original SKILL.md text, and `kverus-postprocess-knowledge.md` carries the translation rulings, deviations, and deployment prerequisites.

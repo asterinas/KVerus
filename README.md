@@ -1,6 +1,7 @@
 # KVerus Skills
 
 KVerus is a skill-based workflow for migrating Rust code to formally verified [Verus](https://github.com/verus-lang/verus/), adding specifications and proofs, repairing verification failures, and auditing the result. Use the skills individually or run the full pipeline with `kverus-run`.
+The current version of the skills is the [hoplogic](https://github.com/hoplogic/hop3) version.
 
 The workflow-based version presented in the ASE 2026 paper *KVerus: Scalable and Resilient Formal Verification Proof Generation for Rust Code* is available on the [`ase-26` branch](../../tree/ase-26).
 
@@ -21,7 +22,16 @@ If you don't have uv installed, please follow the [official instructions](https:
 $ uv sync
 ```
 
-#### 2. Install Verus
+#### 2. Prepare HOP
+
+If you don't have the HopJIT engine installed (the runtime that executes the skills' hoplogic/HopSpec forms), please follow the [official instructions](https://github.com/hoplogic/hop3#%E5%AE%89%E8%A3%85):
+
+```shell
+$ npm install -g @hoplogic/hopjit
+$ hopjit setup
+```
+
+#### 3. Install Verus
 
 KVerus depends on the [Verus](https://github.com/verus-lang/verus/) command-line tool. See the official [installation guide](https://github.com/verus-lang/verus/blob/main/INSTALL.md).
 

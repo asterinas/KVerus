@@ -223,3 +223,5 @@ impl<T /*: ?Sized*/, G: SpinGuardian> RwLock<T, G> {
     }
 }
 ```
+
+- **Hoplogic**: this skill's machine-executable form is the HopSpec in `spec.md`; `source.md` is a verbatim copy of the original SKILL.md text, and `kverus-migrate-knowledge.md` carries the translation rulings, deviations, and deployment prerequisites.

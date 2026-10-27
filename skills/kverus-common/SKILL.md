@@ -57,3 +57,5 @@ Carry these rules into all KVerus skills unless the user explicitly requests a d
 ## Source Basis
 
 This skill summarizes the Verus guide under `source/docs/guide/src`, resolved against the Verus root above.
+
+- **Hoplogic**: this skill's machine-executable form is the HopSpec in `spec.md`; `source.md` is a verbatim copy of the original SKILL.md text, and `kverus-common-knowledge.md` carries the translation rulings, deviations, and deployment prerequisites.

@@ -79,3 +79,5 @@ The goal is to improve the specification layer while preserving executable behav
 Apply edits directly to the target file.
 
 Do not return explanations unless requested.
+
+- **Hoplogic**: this skill's machine-executable form is the HopSpec in `spec.md`; `source.md` is a verbatim copy of the original SKILL.md text, and `kverus-spec-knowledge.md` carries the translation rulings, deviations, and deployment prerequisites.

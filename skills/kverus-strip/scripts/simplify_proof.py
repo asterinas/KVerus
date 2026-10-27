@@ -15,6 +15,68 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+
+def _bootstrap_kverus_env() -> None:
+    """Load kverus.env (written by install-skills.sh) without shell sourcing
+    and re-exec this script under KVERUS_PYTHON when the current interpreter
+    is not it. The search walks up from this file without resolving symlinks
+    so symlinked skill installs find the target project's env file. Idempotent:
+    safe to call again when the caller already sourced kverus.env."""
+    import os
+    import re
+    import sys
+    from pathlib import Path
+
+    if os.environ.get("KVERUS_ENV_BOOTSTRAPPED") == "1":
+        return
+    here = Path(os.path.abspath(__file__)).parent
+    env_path = os.environ.get("KVERUS_ENV_FILE")
+    if not env_path:
+        for ancestor in [here, *here.parents][:5]:
+            candidate = ancestor / "kverus.env"
+            if candidate.is_file():
+                env_path = str(candidate)
+                break
+    if env_path:
+        values = {}
+        for raw in Path(env_path).read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line.removeprefix("export ").lstrip()
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                values[key] = value
+        var_ref = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+        for key in list(values):
+            for _ in range(3):
+                expanded = var_ref.sub(
+                    lambda m: values.get(m.group(1), m.group(0)), values[key]
+                )
+                if expanded == values[key]:
+                    break
+                values[key] = expanded
+        os.environ.update(values)
+    python = os.environ.get("KVERUS_PYTHON")
+    if python and python != sys.executable and Path(python).is_file():
+        os.environ["KVERUS_ENV_BOOTSTRAPPED"] = "1"
+        try:
+            os.execv(python, [python, *sys.argv])
+        except OSError as exc:
+            print(
+                f"warning: re-exec under KVERUS_PYTHON failed: {exc}", file=sys.stderr
+            )
+    os.environ["KVERUS_ENV_BOOTSTRAPPED"] = "1"
+
+
+_bootstrap_kverus_env()
+
+
 try:
     from tree_sitter import Language, Parser, Node
     import tree_sitter_verus

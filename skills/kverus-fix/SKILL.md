@@ -149,3 +149,5 @@ Report whether `verify` and `target` were supplied or discovered. If discovered,
 For every added or changed `assume_specification`, report the qualified API, spec location, Rust source and documentation basis, focused and full verification results, and the residual trusted boundary.
 
 Keep explanation short unless asked for details.
+
+- **Hoplogic**: this skill's machine-executable form is the HopSpec in `spec.md`; `source.md` is a verbatim copy of the original SKILL.md text, and `kverus-fix-knowledge.md` carries the translation rulings, deviations, and deployment prerequisites.
