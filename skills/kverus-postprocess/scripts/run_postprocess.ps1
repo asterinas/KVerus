@@ -15,11 +15,15 @@ $includeSkills  = $env:KVERUS_POSTPROCESS_INCLUDE_SKILLS
 $blockedPaths   = $env:KVERUS_POSTPROCESS_BLOCKED_PATHS
 $generatedPaths = $env:KVERUS_POSTPROCESS_GENERATED_PATHS
 $simplifyScope  = if ($env:KVERUS_POSTPROCESS_SIMPLIFY_SCOPE) { $env:KVERUS_POSTPROCESS_SIMPLIFY_SCOPE } else { 'modified' }
+$enableSimplify = $env:KVERUS_POSTPROCESS_ENABLE_SIMPLIFY
 $skipSimplify   = $env:KVERUS_POSTPROCESS_SKIP_SIMPLIFY
 $refreshRules   = $env:KVERUS_POSTPROCESS_REFRESH_RULES
 
 function Invoke-Checker([bool]$refresh) {
-    $pyArgs = @($checker, '--base', $base, '--rule-repo', $ruleRepo)
+    $pyArgs = @($checker, '--base', $base)
+    if ($ruleRepo) {
+        $pyArgs += "--rule-repo=$ruleRepo"
+    }
     if ($targetPaths) {
         $pyArgs += '--target-path'
         $pyArgs += $targetPaths
@@ -56,10 +60,6 @@ function Invoke-Simplifier {
     if ($verifyCmd) {
         $pyArgs += '--verify-command'
         $pyArgs += $verifyCmd
-        if ($formatCmd) {
-            $pyArgs += '--format-command'
-            $pyArgs += $formatCmd
-        }
     } else {
         $pyArgs += '--dry-run'
     }
@@ -67,46 +67,50 @@ function Invoke-Simplifier {
     python3 @pyArgs
 }
 
-Write-Host '== kverus-postprocess: load cached rules and check =='
-Invoke-Checker ($refreshRules -eq '1')
-if (-not $?) { $firstStatus = $LASTEXITCODE } else { $firstStatus = 0 }
-
-if ($verifyCmd) {
-    Write-Host '== kverus-postprocess: verify =='
-    cmd /c $verifyCmd
-} else {
-    Write-Host '== kverus-postprocess: verify skipped; set KVERUS_POSTPROCESS_VERIFY_CMD =='
+$firstStatus = 0
+if ($refreshRules -eq '1') {
+    Write-Host '== kverus-postprocess: refresh rules and check =='
+    Invoke-Checker $true
+    $firstStatus = $LASTEXITCODE
 }
 
-Write-Host '== kverus-postprocess: simplify redundant asserts =='
-if ($skipSimplify -eq '1') {
-    Write-Host 'Skipping assert simplification because KVERUS_POSTPROCESS_SKIP_SIMPLIFY=1.'
-} else {
+if ($enableSimplify -eq '1' -and $skipSimplify -ne '1') {
+    if ($verifyCmd) {
+        Write-Host '== kverus-postprocess: verify before simplification =='
+        cmd /c $verifyCmd
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    Write-Host '== kverus-postprocess: simplify redundant asserts =='
     Invoke-Simplifier
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if (-not $verifyCmd) {
         Write-Host 'Assert simplification ran in dry-run mode; set KVERUS_POSTPROCESS_VERIFY_CMD to enable removals.'
     }
 }
 
-if ($verifyCmd) {
-    Write-Host '== kverus-postprocess: verify after assert simplification =='
-    cmd /c $verifyCmd
-}
-
 if ($formatCmd) {
     Write-Host '== kverus-postprocess: format =='
     cmd /c $formatCmd
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } else {
     Write-Host '== kverus-postprocess: format skipped; set KVERUS_POSTPROCESS_FORMAT_CMD =='
 }
 
+if ($verifyCmd) {
+    Write-Host '== kverus-postprocess: final verify =='
+    cmd /c $verifyCmd
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} else {
+    Write-Host '== kverus-postprocess: verify skipped; set KVERUS_POSTPROCESS_VERIFY_CMD =='
+}
+
 Write-Host '== kverus-postprocess: final check =='
 Invoke-Checker $false
-if (-not $?) { $finalStatus = $LASTEXITCODE } else { $finalStatus = 0 }
+$finalStatus = $LASTEXITCODE
 
 Write-Host '== kverus-postprocess: git diff --check =='
 git diff --check
-if (-not $?) { $diffCheckStatus = $LASTEXITCODE } else { $diffCheckStatus = 0 }
+$diffCheckStatus = $LASTEXITCODE
 
 Write-Host '== kverus-postprocess: git status =='
 git status --short --branch

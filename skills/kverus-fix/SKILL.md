@@ -128,6 +128,20 @@ Use this exact loop:
 4. verify again
 5. repeat
 
+## Check the Repair Diff
+
+After verification passes, run the static checker from the Git root using
+`KVERUS_PYTHON` from `kverus.env` or `python3`:
+
+```bash
+"$KVERUS_PYTHON" "$AGENT_DIR/skills/kverus-postprocess/scripts/kverus_postprocess.py" \
+  --base HEAD --target-path '<edited repo-relative paths>' --rule-repo '' --no-refresh-rules
+```
+
+Use the caller's base for committed repairs. Check untracked source directly.
+Fix new errors, then repeat verification and the check. Report existing
+findings separately. Leave strip and formatting to postprocess.
+
 ## Failure Policy
 
 If you cannot make verification succeed without violating constraints:
