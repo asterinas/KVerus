@@ -486,6 +486,7 @@ def collect_diff_text(base: str, diff_paths: list[str]) -> str:
             "diff",
             "--find-renames",
             "--find-copies",
+            "HEAD",
             *path_args,
         ],
         check=False,

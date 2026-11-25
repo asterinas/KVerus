@@ -33,7 +33,7 @@ Phase 4  Fix ────────────── repair verification fail
 Phase 5  Eval ───────────── score spec quality (unstaged changes)
 Phase 6  Semantic Audit ──── verify migration preserved runtime behavior
          ── QUALITY GATE ──  pause if critical semantic changes found
-Phase 7  Postprocess ────── final review rules, assert simplification, fmt
+Phase 7  Postprocess ────── final review rules, fmt, verification, optional strip
 Phase 8  Report ─────────── final summary
 ```
 
@@ -61,7 +61,7 @@ weaken this requirement.
    - Example: if `target=src/lib.rs`, copy to `$ORIG_DIR/src/lib.rs`.
 5. Create `out_dir` if it does not exist.
 6. Set `AGENT_DIR` to the installed agent directory for script calls. Skills are read from `$AGENT_DIR/skills`.
-7. If `KVERUS_POSTPROCESS_RULE_REPO` is configured, run the postprocess checker with `--cache-status`. When the cache is stale or missing and subagents are available, delegate one `--refresh-only` command to a subagent. The subagent must make no source edits and preserve the old cache on failure. Continue the pipeline immediately; never perform or wait for a GitHub request in the main agent. If no subagent is available, proceed with cached or static rules.
+7. Prepare the postprocess rule cache as described in `kverus-postprocess`; continue while any delegated refresh runs.
 8. Print a summary: mode (single/directory), file count, target path, verify command.
 
 ---
@@ -264,24 +264,11 @@ After completing the audit reports:
 
 ## Phase 7: Postprocess
 
-Run final cleanup only after Eval and Semantic Audit gates pass or the user explicitly chooses to continue. Use `kverus-postprocess` when a verification command and target paths are available; otherwise skip this phase unless the user provides an equivalent postprocess command.
-
-1. Follow the `kverus-postprocess` skill workflow:
-   - Inspect dynamic review rules from the latest available cache; do not refresh GitHub synchronously.
-   - Run verification.
-   - Delegate redundant proof-assert simplification to `kverus-strip`.
-   - Re-run verification.
-   - Run formatting.
-   - Run final local checks.
-
-2. Use the pipeline `verify` command as `KVERUS_POSTPROCESS_VERIFY_CMD`, `FILE_LIST` or the target directory as `KVERUS_POSTPROCESS_TARGET_PATHS`, and the project formatter as `KVERUS_POSTPROCESS_FORMAT_CMD`. If no verification command is available for the target, run strip in dry-run mode as described by `kverus-postprocess`.
-
-3. Record postprocess results for the final report:
-   - Dynamic rule check result.
-   - Verification command(s) and pass/fail.
-   - Assert simplification attempted/removed counts when available.
-   - Formatting result.
-   - Final local check result.
+After the Eval and Semantic Audit gates allow continuation, follow
+`kverus-postprocess` directly. Use the repository base, `FILE_LIST` or target
+directory, pipeline verification command, and project formatter. Record the
+outcomes in the final report, including attempted and removed strip counts
+when available.
 
 ---
 

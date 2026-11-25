@@ -15,6 +15,7 @@ BLOCKED_PATHS="${KVERUS_POSTPROCESS_BLOCKED_PATHS:-}"
 GENERATED_PATHS="${KVERUS_POSTPROCESS_GENERATED_PATHS:-}"
 SIMPLIFY_SCOPE="${KVERUS_POSTPROCESS_SIMPLIFY_SCOPE:-modified}"
 REFRESH_RULES="${KVERUS_POSTPROCESS_REFRESH_RULES:-0}"
+ENABLE_SIMPLIFY="${KVERUS_POSTPROCESS_ENABLE_SIMPLIFY:-0}"
 
 run_checker() {
     refresh_mode="$1"
@@ -51,43 +52,28 @@ run_simplifier() {
     fi
     if [ -n "$VERIFY_CMD" ]; then
         set -- "$@" --verify-command "$VERIFY_CMD"
-        if [ -n "$FORMAT_CMD" ]; then
-            set -- "$@" --format-command "$FORMAT_CMD"
-        fi
     else
         set -- "$@" --dry-run
     fi
     "$@"
 }
 
-echo "== kverus-postprocess: load cached rules and check =="
 if [ "$REFRESH_RULES" = "1" ]; then
+    echo "== kverus-postprocess: refresh rules and check =="
     run_checker refresh || FIRST_STATUS=$?
-else
-    run_checker cache || FIRST_STATUS=$?
 fi
 : "${FIRST_STATUS:=0}"
 
-if [ -n "$VERIFY_CMD" ]; then
-    echo "== kverus-postprocess: verify =="
-    sh -c "$VERIFY_CMD"
-else
-    echo "== kverus-postprocess: verify skipped; set KVERUS_POSTPROCESS_VERIFY_CMD =="
-fi
-
-echo "== kverus-postprocess: simplify redundant asserts =="
-if [ "${KVERUS_POSTPROCESS_SKIP_SIMPLIFY:-0}" = "1" ]; then
-    echo "Skipping assert simplification because KVERUS_POSTPROCESS_SKIP_SIMPLIFY=1."
-else
+if [ "$ENABLE_SIMPLIFY" = "1" ] && [ "${KVERUS_POSTPROCESS_SKIP_SIMPLIFY:-0}" != "1" ]; then
+    if [ -n "$VERIFY_CMD" ]; then
+        echo "== kverus-postprocess: verify before simplification =="
+        sh -c "$VERIFY_CMD"
+    fi
+    echo "== kverus-postprocess: simplify redundant asserts =="
     run_simplifier
     if [ -z "$VERIFY_CMD" ]; then
         echo "Assert simplification ran in dry-run mode; set KVERUS_POSTPROCESS_VERIFY_CMD to enable removals."
     fi
-fi
-
-if [ -n "$VERIFY_CMD" ]; then
-    echo "== kverus-postprocess: verify after assert simplification =="
-    sh -c "$VERIFY_CMD"
 fi
 
 if [ -n "$FORMAT_CMD" ]; then
@@ -95,6 +81,13 @@ if [ -n "$FORMAT_CMD" ]; then
     sh -c "$FORMAT_CMD"
 else
     echo "== kverus-postprocess: format skipped; set KVERUS_POSTPROCESS_FORMAT_CMD =="
+fi
+
+if [ -n "$VERIFY_CMD" ]; then
+    echo "== kverus-postprocess: final verify =="
+    sh -c "$VERIFY_CMD"
+else
+    echo "== kverus-postprocess: verify skipped; set KVERUS_POSTPROCESS_VERIFY_CMD =="
 fi
 
 echo "== kverus-postprocess: final check =="
